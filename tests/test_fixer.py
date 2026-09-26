@@ -42,6 +42,13 @@ def test_draft_rewrites_charge_create(repo):
     assert "automatic_payment_methods" in change.new_content
     assert "-    charge = stripe.Charge.create(" in change.diff
     assert "+    charge = stripe.PaymentIntent.create(" in change.diff
+    # raw token must NOT be presented as a valid payment_method: the draft
+    # flags conversion to a PaymentMethod ID (pm_...) as a manual step
+    assert "TODO(manual, required)" in change.new_content
+    assert "pm_..." in change.new_content
+    assert "tok_... token" in change.new_content
+    assert any("manual step" in n for n in draft.notes)
+    assert any("payment-methods/transitioning" in n for n in draft.notes)
 
 
 def test_draft_no_match(repo):
@@ -56,6 +63,9 @@ def test_contract_test_generation():
     assert "PaymentIntent.create" in content
     assert '"source" not in kwargs' in content
     assert 'kwargs["payment_method"]' in content
+    # the contract test must require a PaymentMethod ID, not a raw token
+    assert 'startswith("pm_")' in content
+    assert "not a legacy token" in content
 
 
 def test_draft_fix_registry(repo):
@@ -116,7 +126,7 @@ SG_BEFORE = '''import requests
 
 def send_email(to, subject, body):
     resp = requests.post(
-        "https://api.sendgrid.com/v2/mail/send",
+        "https://api.sendgrid.com/api/mail.send.json",
         data={"to": to, "from": "noreply@example.com", "subject": subject, "text": body},
         headers={"Authorization": "Bearer SG.key"},
         timeout=10,
@@ -182,7 +192,7 @@ def test_sendgrid_v2_rewrite(tmp_path):
     assert not draft.empty()
     new = draft.changes[0].new_content
     assert "api.sendgrid.com/v3/mail/send" in new
-    assert "api.sendgrid.com/v2" not in new
+    assert "api/mail.send.json" not in new
     assert "json={" in new and "data={" not in new
     assert '"personalizations"' in new
     assert '"content"' in new

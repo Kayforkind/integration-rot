@@ -42,7 +42,9 @@ def test_db_loads_and_validates():
     for e in entries:
         assert e.id and e.vendor and e.title and e.source_url.startswith("http")
         assert e.severity in ("breaking", "warning", "informational")
-        assert _parse_date(e.announced) is not None  # must parse (YYYY-MM allowed)
+        # announced may be "" when the vendor never published an announcement
+        # date; when present it must parse (YYYY-MM allowed)
+        assert e.announced == "" or _parse_date(e.announced) is not None
         if e.sunset:
             assert _parse_date(e.sunset) is not None
 

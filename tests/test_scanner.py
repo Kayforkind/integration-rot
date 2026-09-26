@@ -25,7 +25,7 @@ def repo(tmp_path):
     (tmp_path / "requirements.txt").write_text(
         "twilio==7.16.0\nrequests>=2.28,<3\n# a comment\n")
     (tmp_path / "app.py").write_text(
-        'import requests\nrequests.post("https://api.sendgrid.com/v2/mail/send")\n')
+        'import requests\nrequests.post("https://api.sendgrid.com/api/mail.send.json")\n')
     return tmp_path
 
 

@@ -158,7 +158,7 @@ def to_markdown(report: Report) -> str:
             else " (already sunset!)" if f.days_to_sunset is not None else "")
         lines.append(f"## [{f.risk.upper()}] {e.vendor}: {e.title}")
         lines.append(f"- **Sunset:** {sunset if e.sunset else 'not announced'}")
-        lines.append(f"- **Announced:** {e.announced} — [source]({e.source_url})")
+        lines.append(f"- **Announced:** {e.announced or 'not published'} — [source]({e.source_url})")
         lines.append("- **Evidence:**")
         for ev in f.evidence:
             lines.append(f"  - {ev}")

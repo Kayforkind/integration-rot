@@ -1,6 +1,6 @@
 [project]
 name = "integration-rot"
-version = "0.2.0"
+version = "0.3.1"
 description = "Integration-rot autopilot MVP: detect deprecated third-party API usage and draft fixes"
 requires-python = ">=3.10"
 dependencies = []

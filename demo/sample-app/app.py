@@ -1,8 +1,8 @@
 """Sample app with INTENTIONALLY outdated third-party API usage.
 
 Used by `integration-rot demo` to show the full pipeline:
-  1. stripe.Charge.create  -> legacy Charges API (fix_available)
-  2. api.sendgrid.com/v2   -> retired SendGrid v2 API (already sunset)
+  1. legacy Charges API usage (fix_available)
+  2. legacy SendGrid v2 API usage (migrate to v3; no vendor sunset published)
 """
 import requests
 import stripe
@@ -23,9 +23,9 @@ def create_charge(amount_cents, currency, token, description=""):
 
 
 def send_receipt(to_email, amount_cents):
-    """Send a receipt via the retired SendGrid v2 endpoint (deprecated)."""
+    """Send a receipt via the legacy SendGrid v2 endpoint (migrate to v3)."""
     resp = requests.post(
-        "https://api.sendgrid.com/v2/mail/send",
+        "https://api.sendgrid.com/api/mail.send.json",
         json={
             "to": to_email,
             "subject": "Your receipt",

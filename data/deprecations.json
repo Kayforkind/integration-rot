@@ -1,19 +1,19 @@
 {
   "_meta": {
-    "note": "CURATED SAMPLE DATA for the MVP demo. Verify dates and migration guidance against vendor docs before production use. Schema: packages[] matches SDK deps (empty = any), code_patterns[] are regexes matched against repo source (empty = any).",
+    "note": "Curated deprecation entries for the integration-rot MVP. Verification status is mixed (re-checked 2026-09-26): SendGrid v2, Twilio Authy, Twilio Fax, Slack RTM, Mailchimp API 2.0, LinkedIn API v1, Salesforce API v21-30, Google Sign-In (gapi.auth2), Stripe Charges, Plaid transactions, Reddit Data API, and GCM were checked against vendor-published pages this session (see source_url per entry). Dates appear only where the vendor published them: empty announced / null sunset means no vendor-published date was found — not an invented date. Twitter's free-API dates are corroborated from multiple outlets quoting the official @TwitterDev announcement (twitter.com was not accessible for first-party verification; see entry). Stripe legacy Checkout, Google+ shutdown, Instagram Legacy API, and GitHub query-param auth carry vendor-owned sources from the original curation, not re-verified this session. Verify entries against vendor docs before production use.",
     "version": 2,
     "updated": "2026-09-26"
   },
   "deprecations": [
     {
-      "announced": "2019-09-14",
+      "announced": "",
       "code_patterns": [
         "stripe\\.Charge\\.create",
         "\\.charges\\.create\\("
       ],
       "fix_available": true,
       "id": "stripe-charges-api",
-      "migration": "Migrate from stripe.Charge.create to stripe.PaymentIntent.create. Map `source` -> `payment_method`, add `confirm=True`, and handle next_action for 3D Secure. See https://docs.stripe.com/payments/payment-intents",
+      "migration": "Stripe supersedes the Charges API with PaymentIntents (SCA-ready); no vendor shutdown date has been published — the APIs can be used in parallel. Migrate from stripe.Charge.create to stripe.PaymentIntent.create. The legacy card token must be converted to a PaymentMethod first: pass a PaymentMethod ID (pm_...) as payment_method — a raw tok_... token is not a documented payment_method value. See https://stripe.com/docs/payments/payment-methods/transitioning and https://stripe.com/docs/api/payment_intents/create",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -27,7 +27,7 @@
         }
       ],
       "severity": "warning",
-      "source_url": "https://docs.stripe.com/payments/payment-intents",
+      "source_url": "https://stripe.com/docs/payments/payment-methods/transitioning",
       "sunset": null,
       "title": "Legacy Charges API superseded by PaymentIntents (SCA-ready)",
       "vendor": "Stripe"
@@ -49,14 +49,14 @@
       "vendor": "Stripe"
     },
     {
-      "announced": "2024-07-01",
+      "announced": "",
       "code_patterns": [
         "authy_api",
         "Authy\\("
       ],
       "fix_available": true,
       "id": "twilio-authy-api",
-      "migration": "Migrate one-time passcode flows from the Authy API to the Twilio Verify API (v2). Verify supports SMS, voice, email, push and TOTP under one API. See https://www.twilio.com/docs/verify",
+      "migration": "Migrate one-time passcode flows from the Authy API to the Twilio Verify API (v2). Verify supports SMS, voice, email, push and TOTP under one API. Note: Twilio has closed Authy to new customers and ended Authy SMS/Voice support (Nov 2022); no full end-of-life date has been published. See https://www.twilio.com/docs/verify",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -70,20 +70,20 @@
         }
       ],
       "severity": "breaking",
-      "source_url": "https://www.twilio.com/en-us/changelog",
-      "sunset": "2025-07-01",
-      "title": "Twilio Authy API end-of-life \u2014 migrate to Verify",
+      "source_url": "https://www.twilio.com/docs/authy",
+      "sunset": null,
+      "title": "Twilio Authy API deprecated — migrate to Verify",
       "vendor": "Twilio"
     },
     {
-      "announced": "2020-06-01",
+      "announced": "2020-12-17",
       "code_patterns": [
         "\\.fax\\.",
         "Fax\\.create"
       ],
       "fix_available": false,
       "id": "twilio-fax-api",
-      "migration": "Programmable Fax reached end of life. Migrate fax workflows to a third-party fax provider or remove the integration. See https://www.twilio.com/en-us/changelog",
+      "migration": "Programmable Fax reached end of life on 2021-12-17 (announced 2020-12-17). Migrate fax workflows to a third-party fax provider or remove the integration. See https://www.twilio.com/en-us/changelog/programmable-fax-end-of-life-one-year-notice",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -97,13 +97,13 @@
         }
       ],
       "severity": "breaking",
-      "source_url": "https://www.twilio.com/en-us/changelog",
-      "sunset": "2021-12-31",
+      "source_url": "https://www.twilio.com/en-us/changelog/programmable-fax-end-of-life-one-year-notice",
+      "sunset": "2021-12-17",
       "title": "Twilio Programmable Fax deprecated",
       "vendor": "Twilio"
     },
     {
-      "announced": "2022-01-01",
+      "announced": "2021-10-05",
       "code_patterns": [
         "RTMClient",
         "rtm\\.connect",
@@ -111,7 +111,7 @@
       ],
       "fix_available": true,
       "id": "slack-rtm-api",
-      "migration": "New Slack apps should use Socket Mode or the Events API instead of RTM. RTM remains for classic apps but receives no new features. See https://api.slack.com/rtm",
+      "migration": "Since 2021-11-30 new Slack apps can only call rtm.connect; on 2022-09-27 rtm.start began behaving exactly like rtm.connect (the legacy response was retired). Note: Slack retired rtm.start, not the RTM API itself. See https://api.slack.com/changelog/2021-10-rtm-start-to-stop",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -125,19 +125,19 @@
         }
       ],
       "severity": "warning",
-      "source_url": "https://api.slack.com/changelog",
-      "sunset": null,
-      "title": "Slack RTM API deprecated for new apps \u2014 use Socket Mode / Events API",
+      "source_url": "https://api.slack.com/changelog/2021-10-rtm-start-to-stop",
+      "sunset": "2022-09-27",
+      "title": "Slack rtm.start retired — use Socket Mode / Events API",
       "vendor": "Slack"
     },
     {
-      "announced": "2020-04-01",
+      "announced": "",
       "code_patterns": [
-        "api\\.sendgrid\\.com/v2"
+        "api\\.sendgrid\\.com/api/"
       ],
       "fix_available": true,
       "id": "sendgrid-v2-api",
-      "migration": "The v2 API is retired. Migrate all calls to v3 endpoints (e.g. /v3/mail/send) and use the current SDKs. See https://docs.sendgrid.com/for-developers/sending-email/api-getting-started",
+      "migration": "SendGrid encourages v2 API customers to migrate to v3; no sunset date has been published. Migrate calls to v3 endpoints (e.g. /v3/mail/send) with the nested JSON payload and use the current SDKs. The real v2 endpoint shape is https://api.sendgrid.com/api/mail.send.json. See https://www.twilio.com/docs/sendgrid/for-developers/sending-email/migrating-from-v2-to-v3-mail-send",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -150,20 +150,20 @@
           "version_spec": ""
         }
       ],
-      "severity": "breaking",
-      "source_url": "https://docs.sendgrid.com/for-developers/sending-email/api-getting-started",
-      "sunset": "2021-06-30",
-      "title": "SendGrid v2 API sunset \u2014 migrate to v3",
+      "severity": "warning",
+      "source_url": "https://www.twilio.com/docs/sendgrid/for-developers/sending-email/migrating-from-v2-to-v3-mail-send",
+      "sunset": null,
+      "title": "SendGrid v2 API deprecated — migrate to v3 (no sunset published)",
       "vendor": "SendGrid"
     },
     {
-      "announced": "2022-06-01",
+      "announced": "",
       "code_patterns": [
         "/transactions/get"
       ],
       "fix_available": true,
       "id": "plaid-legacy-transactions",
-      "migration": "Migrate transaction ingestion from /transactions/get to /transactions/sync for incremental updates and better coverage. See https://plaid.com/docs/api/products/transactions/",
+      "migration": "Plaid's /transactions/sync is the newer endpoint that replaces /transactions/get (Plaid does not label /transactions/get \"deprecated\"). Replace all /transactions/get calls with /transactions/sync for incremental updates; persist the cursor. See https://plaid.com/docs/transactions/sync-migration/",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -177,15 +177,15 @@
         }
       ],
       "severity": "warning",
-      "source_url": "https://plaid.com/docs/api/products/transactions/",
+      "source_url": "https://plaid.com/docs/transactions/sync-migration/",
       "sunset": null,
-      "title": "Plaid legacy /transactions/get superseded by /transactions/sync",
+      "title": "Plaid /transactions/get replaced by /transactions/sync",
       "vendor": "Plaid"
     },
     {
       "id": "twitter-free-api-retirement",
       "vendor": "Twitter",
-      "title": "Twitter free API v1.1/v2 \u2192 paid Basic tier",
+      "title": "Twitter free API v1.1/v2 → paid Basic tier",
       "announced": "2023-02-02",
       "sunset": "2023-02-09",
       "severity": "breaking",
@@ -199,6 +199,21 @@
           "ecosystem": "pypi",
           "name": "twython",
           "version_spec": ""
+        },
+        {
+          "ecosystem": "npm",
+          "name": "twitter-api-v2",
+          "version_spec": ""
+        },
+        {
+          "ecosystem": "npm",
+          "name": "twit",
+          "version_spec": ""
+        },
+        {
+          "ecosystem": "npm",
+          "name": "twitter",
+          "version_spec": ""
         }
       ],
       "code_patterns": [
@@ -208,15 +223,15 @@
         "twitter\\.Api",
         "api\\.twitter\\.com/1\\.1"
       ],
-      "migration": "Migrate to Twitter API v2 paid Basic tier.",
+      "migration": "Twitter ended free API access (v1.1 and v2) in favor of paid tiers. Dates below are corroborated from multiple outlets quoting the official @TwitterDev announcement of 2023-02-02 (cutoff announced for 2023-02-09, later delayed/softened); twitter.com was not accessible for first-party verification. Migrate to a paid X API tier.",
       "source_url": "https://www.thewrap.com/twitter-api-free-access-paid-basic-tier/",
       "fix_available": false
     },
     {
       "id": "reddit-free-api-retirement",
       "vendor": "Reddit",
-      "title": "Reddit free API \u2192 paid Data API",
-      "announced": "2023-04-18",
+      "title": "Reddit free API → paid Data API",
+      "announced": "",
       "sunset": "2023-07-01",
       "severity": "breaking",
       "packages": [
@@ -231,8 +246,8 @@
         "api\\.reddit\\.com",
         "oauth\\.reddit\\.com"
       ],
-      "migration": "Migrate to the paid Reddit Data API.",
-      "source_url": "https://www.theverge.com/2023/4/18/23688476/reddit-developer-api-closure-apollo",
+      "migration": "Reddit replaced free Data API access with paid tiers: updated Data API Terms effective 2023-06-19, and paid rates ($0.24 per 1K calls) with free rate limits effective 2023-07-01. No Reddit-owned announcement date was verifiable. See https://redditinc.com/blog/apifacts",
+      "source_url": "https://redditinc.com/blog/apifacts",
       "fix_available": false
     },
     {
@@ -250,7 +265,7 @@
         }
       ],
       "code_patterns": [
-        "plus\\.google\\.com",
+        "googleapis\\.com/plus/v1",
         "build\\(['\"]plus['\"],\\s*['\"]v1['\"]\\)"
       ],
       "migration": "Migrate to Google Sign-In and the People API.",
@@ -260,7 +275,7 @@
     {
       "id": "gcm-to-fcm",
       "vendor": "Google",
-      "title": "Google Cloud Messaging \u2192 Firebase Cloud Messaging",
+      "title": "Google Cloud Messaging → Firebase Cloud Messaging",
       "announced": "2018-04-10",
       "sunset": "2019-04-11",
       "severity": "breaking",
@@ -276,16 +291,16 @@
         "import gcm",
         "android\\.googleapis\\.com/gcm/send"
       ],
-      "migration": "Migrate to the FCM HTTP v1 API.",
-      "source_url": "https://en.wikipedia.org/wiki/Google_Cloud_Messaging",
+      "migration": "Google deprecated the GCM server and client APIs on 2018-04-10, with removal as of 2019-04-11. Migrate to the FCM HTTP v1 API. See https://firebase.blog/posts/2018/04/time-to-upgrade-from-gcm-to-fcm",
+      "source_url": "https://firebase.blog/posts/2018/04/time-to-upgrade-from-gcm-to-fcm",
       "fix_available": false
     },
     {
       "id": "linkedin-api-v1-v2",
       "vendor": "LinkedIn",
-      "title": "LinkedIn API v1 \u2192 v2",
-      "announced": "2018-12-17",
-      "sunset": "2019-03-01",
+      "title": "LinkedIn API v1 → v2",
+      "announced": "2018-12",
+      "sunset": "2019-05-01",
       "severity": "breaking",
       "packages": [
         {
@@ -299,16 +314,16 @@
         "python-linkedin",
         "from linkedin import"
       ],
-      "migration": "Migrate to LinkedIn API v2.",
-      "source_url": "https://github.com/opauth/linkedin/issues/14",
+      "migration": "LinkedIn API v1 is no longer supported as of 2019-05-01 (the deadline was extended from 2019-03-01). Migrate to the current LinkedIn APIs with OAuth 2.0. See https://engineering.linkedin.com/blog/2018/12/developer-program-updates",
+      "source_url": "https://engineering.linkedin.com/blog/2018/12/developer-program-updates",
       "fix_available": false
     },
     {
       "id": "mailchimp-api-2-retirement",
       "vendor": "Mailchimp",
-      "title": "Mailchimp API 2.0 / Export API 1.0 retirement \u2192 API 3.0",
-      "announced": "2023-04",
-      "sunset": "2023-06-05",
+      "title": "Mailchimp API 2.0 / Export API 1.0 retirement → API 3.0",
+      "announced": "2023-06-01",
+      "sunset": "2023-06-01",
       "severity": "breaking",
       "packages": [
         {
@@ -327,8 +342,8 @@
         "\\.api\\.mailchimp\\.com/2\\.0",
         "mailchimp\\.Mailchimp"
       ],
-      "migration": "Migrate to Mailchimp Marketing API 3.0.",
-      "source_url": "https://www.miva.com/forums/forum/online-merchants/miva-10/720115-mailchimp-api-3-0",
+      "migration": "Mailchimp deprecated API 2.0 and Export API 1.0 on 2016-12-31 and retired them on 2023-06-01 (calls now return HTTP 410). Migrate to the Marketing API 3.0. See https://mailchimp.com/developer/release-notes/export-api-1-0-and-api-2-0-no-longer-supported/",
+      "source_url": "https://mailchimp.com/developer/release-notes/export-api-1-0-and-api-2-0-no-longer-supported/",
       "fix_available": true
     },
     {
@@ -357,7 +372,7 @@
     {
       "id": "github-api-query-auth",
       "vendor": "GitHub",
-      "title": "GitHub API auth via query params \u2192 Authorization header",
+      "title": "GitHub API auth via query params → Authorization header",
       "announced": "2020-02-10",
       "sunset": "2021-09-08",
       "severity": "breaking",
@@ -373,25 +388,25 @@
     {
       "id": "google-signin-gsi",
       "vendor": "Google",
-      "title": "Google Sign-In JS platform library (gapi.auth2) \u2192 Google Identity Services",
-      "announced": "2023-03-31",
-      "sunset": null,
+      "title": "Google Sign-In JS platform library (gapi.auth2) → Google Identity Services",
+      "announced": "2021-08-05",
+      "sunset": "2023-03-31",
       "severity": "warning",
       "packages": [],
       "code_patterns": [
         "apis\\.google\\.com/js/platform\\.js",
         "gapi\\.auth2"
       ],
-      "migration": "Migrate to Google Identity Services (accounts.google.com/gsi/client).",
-      "source_url": "https://developers.google.com/identity/sign-in/web/deprecation-and-sunset",
+      "migration": "Google announced the deprecation of the JavaScript Platform Library for web (gapi.auth2) on 2021-08-05 and planned full retirement on 2023-03-31. Migrate to Google Identity Services (accounts.google.com/gsi/client).",
+      "source_url": "http://developers.googleblog.com/en/discontinuing-google-sign-in-javascript-platform-library-for-web/",
       "fix_available": false
     },
     {
       "id": "salesforce-api-v21-v30",
       "vendor": "Salesforce",
-      "title": "Salesforce Platform API v21.0\u2013v30.0 retirement",
+      "title": "Salesforce Platform API v21.0–v30.0 retirement",
       "announced": "2020-10-20",
-      "sunset": "2025-06-01",
+      "sunset": null,
       "severity": "warning",
       "packages": [
         {
@@ -403,8 +418,8 @@
       "code_patterns": [
         "/services/data/v(2[1-9]|30)\\.[0-9]"
       ],
-      "migration": "Upgrade to a supported API version (v41.0+).",
-      "source_url": "https://help.salesforce.com/s/articleView?id=000389618&type=1",
+      "migration": "Salesforce deprecated Platform API v21.0-v30.0 as of the Summer '22 release and retired them as of the Summer '25 release (Salesforce publishes release-cycle dates, not exact calendar dates). Upgrade to a supported API version (v41.0+). See https://help.salesforce.com/s/articleView?id=000389618&language=en_US&type=1",
+      "source_url": "https://help.salesforce.com/s/articleView?id=000389618&language=en_US&type=1",
       "fix_available": true
     }
   ]

@@ -174,7 +174,7 @@
 
 <div class="wrap">
   <header class="hero">
-    <span class="kicker">v0.3.0 &mdash; 8 auto-fixers, executed verification, drift history &amp; live feed scanning</span>
+    <span class="kicker">v0.3.1 &mdash; 8 auto-fixers, executed verification, drift history &amp; live feed scanning</span>
     <h1>Your APIs are rotting.<br><span class="grad">Catch it before production does.</span></h1>
     <p class="sub">
       Integration-rot scans your repos for deprecated third-party API usage,
@@ -187,15 +187,15 @@
     </div>
 
     <div class="term">
-      <div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">integration-rot check ./myapp</span></div>
-<pre><span class="c-prompt">$</span> integration-rot check ./myapp
+      <div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">integration-rot check demo/sample-app</span></div>
+<pre><span class="c-prompt">$</span> integration-rot check demo/sample-app
 
-Integration-rot report for ./myapp
-  critical=1 high=0 medium=1 low=0
+Integration-rot report for demo/sample-app
+  critical=0 high=0 medium=2 low=0
 
-  [<span class="c-crit">CRITICAL</span>] SendGrid: SendGrid v2 API sunset — migrate to v3 (sunset 2021-06-30)
+  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date)
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
-             - app.py:28: `"https://api.sendgrid.com/v2/mail/send",` (matches sendgrid-v2-api)
+             - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
   [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)
@@ -243,7 +243,7 @@ Integration-rot report for ./myapp
       <p class="desc">Inventory every third-party dependency and find hardcoded vendor API
         calls. Parses <code>package.json</code>, <code>requirements.txt</code>,
         <code>go.mod</code>, <code>Gemfile</code> and <code>pom.xml</code>, maps
-        ~45 SDK packages to vendors, and heuristically spots vendor hostnames in source.</p>
+        64 SDK packages to vendors (plus 13 API hostnames), and heuristically spots vendor hostnames in source.</p>
       <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">scan</span></div>
 <pre><span class="c-prompt">$</span> integration-rot scan demo/sample-app
 Dependencies found in demo/sample-app:
@@ -253,24 +253,25 @@ Dependencies found in demo/sample-app:
   pypi     stripe 2.56.0 [Stripe]  (requirements.txt)
 
 Direct vendor API calls:
-  [SendGrid] app.py:28: "https://api.sendgrid.com/v2/mail/send",</pre>
+  [SendGrid] app.py:28: "https://api.sendgrid.com/api/mail.send.json",</pre>
       </div>
     </div>
 
     <div class="stage">
       <div class="stage-head"><span class="stage-num">02</span><h3>Match &amp; rank</h3><code>integration-rot check</code></div>
       <p class="desc">Cross-reference the inventory against a curated knowledge base of
-        <strong>17 real deprecations</strong>. Risk is ranked by days-to-sunset and severity;
+        <strong>17 deprecations</strong> — each linked to its vendor source, with dates only
+        where the vendor published them. Risk is ranked by days-to-sunset and severity;
         exit code 1 on critical/high &mdash; built for CI gates and Markdown/JSON reporting.</p>
       <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">check</span></div>
 <pre><span class="c-prompt">$</span> integration-rot check demo/sample-app
 
 Integration-rot report for demo/sample-app
-  critical=1 high=0 medium=1 low=0
+  critical=0 high=0 medium=2 low=0
 
-  [<span class="c-crit">CRITICAL</span>] SendGrid: SendGrid v2 API sunset — migrate to v3 (sunset 2021-06-30)
+  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date)
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
-             - app.py:28: `"https://api.sendgrid.com/v2/mail/send",` (matches sendgrid-v2-api)
+             - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
   [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)</pre>
@@ -280,18 +281,28 @@ Integration-rot report for demo/sample-app
     <div class="stage">
       <div class="stage-head"><span class="stage-num">03</span><h3>Draft the fix</h3><code>integration-rot fix</code></div>
       <p class="desc">Generate a real unified diff plus a contract test that proves the new
-        API contract. Five migration drafters ship today: Stripe Charges&rarr;PaymentIntents,
+        API contract. Eight migration drafters ship today: Stripe Charges&rarr;PaymentIntents,
         Twilio Authy&rarr;Verify v2, SendGrid v2&rarr;v3, Plaid
-        <code>/transactions/get</code>&rarr;<code>/transactions/sync</code>, Slack RTM&rarr;Socket Mode.</p>
+        <code>/transactions/get</code>&rarr;<code>/transactions/sync</code>, Slack RTM&rarr;Socket Mode,
+        GitHub <code>?access_token=</code>&rarr;Authorization header, Salesforce retired API
+        versions&rarr;v59.0, and Mailchimp API 2.0&rarr;3.0 (migration draft &mdash; v3 operations
+        need manual endpoint mapping).</p>
       <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">fix</span></div>
 <pre><span class="c-prompt">$</span> integration-rot fix demo/sample-app --entry stripe-charges-api --file app.py
 <span class="c-del">--- a/app.py</span>
 <span class="c-add">+++ b/app.py</span>
-@@ -13,11 +13,13 @@
+@@ -13,11 +13,20 @@
 
  def create_charge(amount_cents, currency, token, description=""):
      """Charge a card using the legacy Charges API (deprecated pattern)."""
 <span class="c-del">-    charge = stripe.Charge.create(</span>
+<span class="c-add">+    # TODO(manual, required): `token` was a legacy Charges-API card token.</span>
+<span class="c-add">+    # It MUST now be a PaymentMethod ID (pm_...): convert it first — e.g. Stripe's</span>
+<span class="c-add">+    # Dashboard data migration tool for saved cards, or the Payment Element /</span>
+<span class="c-add">+    # Checkout for new cards. Stripe documents `payment_method` as a</span>
+<span class="c-add">+    # PaymentMethod, Card, or compatible Source ID — NOT a raw tok_... token.</span>
+<span class="c-add">+    # https://stripe.com/docs/api/payment_intents/create</span>
+<span class="c-add">+    # https://stripe.com/docs/payments/payment-methods/transitioning</span>
 <span class="c-add">+    charge = stripe.PaymentIntent.create(</span>
          amount=amount_cents,
          currency=currency,
@@ -304,8 +315,13 @@ Integration-rot report for demo/sample-app
      return charge
 
 <span class="c-note">--- generated contract test: tests/test_stripe_payment_intent_contract.py ---</span>
+"""Contract test sketch ... asserts the call *shape* only — it does not prove
+Stripe accepts the value. payment_method must be a real pm_... ID."""
 Notes:
   - rewrote 1 stripe.Charge.create call(s) to stripe.PaymentIntent.create (SCA-ready)
+  - `source=token` was a legacy Charges-API card token: convert it to a PaymentMethod
+    (pm_...) — manual step, e.g. Stripe's Dashboard data migration tool — then pass
+    the pm_... ID. See https://stripe.com/docs/payments/payment-methods/transitioning
   - verify with stripe-mock or Stripe test clocks before merging</pre>
       </div>
     </div>
@@ -314,9 +330,13 @@ Notes:
       <div class="stage-head"><span class="stage-num">04</span><h3>Prove &amp; propose</h3><code>integration-rot verify</code> + <code>drift</code> + <code>propose</code></div>
       <p class="desc"><em>Execute</em> the migration, don't just draft it: run the contract tests in
         an isolated sandbox before anything touches your repo. Catch the changes vendors
-        <em>don't</em> announce: diff a pinned OpenAPI snapshot against the live spec —
-        or track drift over time with timestamped snapshot history. Then open the PR
-        &mdash; risk finding, diff, contract test and reviewer notes all attached.</p>
+        <em>don't</em> announce: diff a pinned OpenAPI snapshot against the live spec and see
+        changed params and fields on the endpoints you pin &mdash; or track drift over time
+        with timestamped snapshot history. Then <code>propose</code> opens the PR from your
+        already-pushed branch, with the risk finding, diff and reviewer notes attached.
+        (It doesn't create the branch, commit, or push, and it doesn't run the contract test
+        &mdash; <code>verify</code> runs tests in a sandbox; test-gating <code>propose</code> is on
+        the v0.4 roadmap.)</p>
       <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">verify + drift + propose</span></div>
 <pre><span class="c-prompt">$</span> integration-rot verify ./myrepo --entry stripe-charges-api --file app.py
 
@@ -330,9 +350,8 @@ Contract tests run: 1 (PASS)
 
 <span class="c-prompt">$</span> integration-rot drift --vendor stripe --spec ./stripe-spec.json
 
-Schema drift for Stripe: Stripe: 1 endpoint(s) added, 0 removed, 1 changed
+Schema drift for Stripe: Stripe: 0 endpoint(s) added, 0 removed, 1 changed
 
-  <span class="c-add">[ADDED]   POST /v1/terminal/readers</span>
   <span class="c-med">[CHANGED] POST /v1/charges</span>
             - request field `capture` removed
             - response field `amount` type changed: integer -&gt; string
@@ -351,12 +370,12 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
     <h2>What you get</h2>
     <p class="lede">A complete loop from detection to merged PR &mdash; not another dashboard that just tells you you're doomed.</p>
     <div class="feats">
-      <div class="card"><span class="icon">📚</span><h3>Curated deprecation DB</h3><p>17 real, sourced deprecations across 13 vendors. Every entry links its announcement &mdash; no invented sunsets.</p></div>
+      <div class="card"><span class="icon">📚</span><h3>Curated deprecation DB</h3><p>17 curated deprecations across 13 vendors, each linked to its vendor source. Dates appear only where the vendor published them &mdash; entries without a published date say so. No invented sunsets.</p></div>
       <div class="card"><span class="icon">🎯</span><h3>Risk-ranked findings</h3><p>Critical/high/medium/low by days-to-sunset and severity. Exit code 1 on serious findings &mdash; gate your CI.</p></div>
-      <div class="card"><span class="icon">🔧</span><h3>Migration drafters</h3><p>Real unified-diff patches for 5 migrations: Stripe, Twilio Verify, SendGrid v3, Plaid sync, Slack Socket Mode.</p></div>
+      <div class="card"><span class="icon">🔧</span><h3>Migration drafters</h3><p>Real unified-diff patches for 8 migrations: Stripe, Twilio Verify, SendGrid v3, Plaid sync, Slack Socket Mode, GitHub auth headers, Salesforce versions, Mailchimp v3 (draft).</p></div>
       <div class="card"><span class="icon">🧪</span><h3>Contract tests</h3><p>Every draft ships a pytest contract test asserting the new API's parameter contract. Proof, not vibes.</p></div>
       <div class="card"><span class="icon">🔭</span><h3>Schema-drift detection</h3><p>Diff pinned OpenAPI snapshots against live vendor specs — or keep a timestamped drift history. Catches the changes nobody announced.</p></div>
-      <div class="card"><span class="icon">📬</span><h3>PR proposer</h3><p>Opens GitHub PRs carrying the risk report, diff, contract test and reviewer notes. Draft-PR mode included.</p></div>
+      <div class="card"><span class="icon">📬</span><h3>PR proposer</h3><p>Opens a GitHub PR from your already-pushed branch, carrying the risk report, diff and reviewer notes. Draft-PR mode included. (It doesn't run the contract test &mdash; <code>verify</code> does.)</p></div>
     </div>
   </div>
 </section>
@@ -364,7 +383,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <section id="coverage">
   <div class="wrap">
     <h2>Deprecation coverage</h2>
-    <p class="lede">The knowledge base today &mdash; each entry verified against its vendor announcement. Five ship with auto-fixers; the rest are detection-ready.</p>
+    <p class="lede">The knowledge base today &mdash; dates only where the vendor published them. Eight ship with auto-fixers; the rest are detection-ready.</p>
     <table class="cov">
       <thead><tr><th>Vendor</th><th>Entry</th><th>Title</th><th>Auto-fix</th></tr></thead>
       <tbody>
@@ -381,10 +400,10 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
         <tr><td>Google</td><td class="id">gcm-to-fcm</td><td>Google Cloud Messaging → Firebase Cloud Messaging</td><td><span class="pill no">detect</span></td></tr>
         <tr><td>Google</td><td class="id">google-signin-gsi</td><td>gapi.auth2 → Google Identity Services</td><td><span class="pill no">detect</span></td></tr>
         <tr><td>LinkedIn</td><td class="id">linkedin-api-v1-v2</td><td>API v1 → v2</td><td><span class="pill no">detect</span></td></tr>
-        <tr><td>Mailchimp</td><td class="id">mailchimp-api-2-retirement</td><td>API 2.0 / Export API 1.0 → API 3.0</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Mailchimp</td><td class="id">mailchimp-api-2-retirement</td><td>API 2.0 / Export API 1.0 → API 3.0</td><td><span class="pill fix">fixer</span></td></tr>
         <tr><td>Instagram</td><td class="id">instagram-legacy-api-shutdown</td><td>Legacy API Platform shutdown</td><td><span class="pill no">detect</span></td></tr>
-        <tr><td>GitHub</td><td class="id">github-api-query-auth</td><td>Query-param auth → Authorization header</td><td><span class="pill no">detect</span></td></tr>
-        <tr><td>Salesforce</td><td class="id">salesforce-api-v21-v30</td><td>Platform API v21.0–v30.0 retirement</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>GitHub</td><td class="id">github-api-query-auth</td><td>Query-param auth → Authorization header</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>Salesforce</td><td class="id">salesforce-api-v21-v30</td><td>Platform API v21.0–v30.0 retirement</td><td><span class="pill fix">fixer</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -393,7 +412,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <section id="architecture">
   <div class="wrap">
     <h2>Architecture</h2>
-    <p class="lede">Five modules, zero runtime dependencies. The fetcher abstraction means live vendor feeds plug in without touching the analyzer.</p>
+    <p class="lede">Ten modules, zero runtime dependencies. The fetcher abstraction means live vendor feeds plug in without touching the analyzer.</p>
     <div class="arch">
       <svg viewBox="0 0 720 200" width="720" height="200" font-family="ui-monospace, monospace" font-size="12">
         <defs>
@@ -446,13 +465,14 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
         <text x="363" y="30" fill="#8b93a7" text-anchor="middle" font-size="11">target repo in → ranked findings → patch → pull request</text>
       </svg>
     </div>
+    <p style="text-align:center;color:var(--mut);font-size:13.5px;margin-top:18px;font-family:ui-monospace,monospace;">analyzer · cli · deprecations · fixer · models · proposer · scanner · schema_drift · vendor_map · verifier</p>
   </div>
 </section>
 
 <section id="roadmap">
   <div class="wrap">
     <h2>Roadmap</h2>
-    <p class="lede">v0.3.0 is the working core — verified, not just drafted. Next: deeper fixes, team workflow, vendor partnerships.</p>
+    <p class="lede">v0.3.1 is the working core — verified, not just drafted. Next: deeper fixes, team workflow, vendor partnerships.</p>
     <div class="road">
       <div class="card">
         <span class="ver">v0.3 — shipped ✓</span>
@@ -469,6 +489,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
           <li>Fixers for the long tail (Twitter, Reddit, more auth migrations)</li>
           <li>Multi-file migrations, not just single-file</li>
           <li>Drift against observed traffic, not just specs</li>
+          <li>Run the contract test before proposing the PR</li>
         </ul>
       </div>
       <div class="card">

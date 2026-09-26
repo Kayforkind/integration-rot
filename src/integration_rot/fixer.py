@@ -99,14 +99,22 @@ def _split_top_level_kwargs(arg_text: str) -> list[str]:
     return parts
 
 
-def _migrate_charge_kwargs(arg_text: str, indent: str = "    ") -> tuple[str, list[str]]:
+def _migrate_charge_kwargs(arg_text: str, indent: str = "    ") -> tuple[str, list[str], str | None]:
     """Rewrite Charge.create kwargs to PaymentIntent.create kwargs.
 
-    Returns (new_arg_text, notes). Mapping: source -> payment_method,
+    Returns (new_arg_text, notes, legacy_source). Mapping: source -> payment_method,
     plus confirm=True and SCA-safe automatic_payment_methods.
+
+    legacy_source is the original `source=` value when one was present. Stripe
+    documents `payment_method` as a PaymentMethod, Card, or compatible Source ID
+    — NOT a raw tok_... token — so the caller must flag token-to-PaymentMethod
+    conversion as a manual step.
+    https://stripe.com/docs/api/payment_intents/create
+    https://stripe.com/docs/payments/payment-methods/transitioning
     """
     notes = []
     new_kwargs = []
+    legacy_source = None
     seen_payment_method = False
     for kw in _split_top_level_kwargs(arg_text):
         m = re.match(r"(\w+)\s*=\s*(.*)$", kw, re.S)
@@ -116,6 +124,9 @@ def _migrate_charge_kwargs(arg_text: str, indent: str = "    ") -> tuple[str, li
             continue
         key, val = m.group(1), m.group(2).strip()
         if key == "source":
+            # Keep the value expression, but it MUST now be a PaymentMethod ID
+            # (pm_...): a raw tok_... token is not a documented payment_method value.
+            legacy_source = val
             new_kwargs.append(f"payment_method={val}")
             seen_payment_method = True
         elif key in ("amount", "currency", "description", "metadata",
@@ -134,7 +145,7 @@ def _migrate_charge_kwargs(arg_text: str, indent: str = "    ") -> tuple[str, li
                      "a SetupIntent + confirm flow")
     new_kwargs.append("confirm=True")
     new_kwargs.append('automatic_payment_methods={"enabled": True, "allow_redirects": "never"}')
-    return (",\n" + indent).join(new_kwargs), notes
+    return (",\n" + indent).join(new_kwargs), notes, legacy_source
 
 
 def draft_stripe_charges_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
@@ -156,8 +167,34 @@ def draft_stripe_charges_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
         base_indent = new_source[line_start:start][
             :len(new_source[line_start:start]) - len(new_source[line_start:start].lstrip())]
         arg_indent = base_indent + "    "
-        new_args, notes = _migrate_charge_kwargs(arg_text, indent=arg_indent)
+        new_args, notes, legacy_source = _migrate_charge_kwargs(arg_text, indent=arg_indent)
         draft.notes.extend(notes)
+        if legacy_source:
+            # Flag the manual conversion step: a raw tok_... token is NOT a
+            # documented payment_method value. The user must convert it to a
+            # PaymentMethod (pm_...) first.
+            draft.notes.append(
+                f"`source={legacy_source}` was a legacy Charges-API card token: convert it "
+                "to a PaymentMethod (pm_...) — manual step, e.g. Stripe's Dashboard data "
+                "migration tool — then pass the pm_... ID. "
+                "See https://stripe.com/docs/payments/payment-methods/transitioning")
+            preamble = (
+                f"{base_indent}# TODO(manual, required): `{legacy_source}` was a legacy "
+                f"Charges-API card token.\n"
+                f"{base_indent}# It MUST now be a PaymentMethod ID (pm_...): convert it first — "
+                f"e.g. Stripe's\n"
+                f"{base_indent}# Dashboard data migration tool for saved cards, or the Payment "
+                f"Element /\n"
+                f"{base_indent}# Checkout for new cards. Stripe documents `payment_method` as a\n"
+                f"{base_indent}# PaymentMethod, Card, or compatible Source ID — NOT a raw tok_... token.\n"
+                f"{base_indent}# https://stripe.com/docs/api/payment_intents/create\n"
+                f"{base_indent}# https://stripe.com/docs/payments/payment-methods/transitioning\n"
+            )
+            # line_start is before `start`, so insert here first and shift positions.
+            new_source = new_source[:line_start] + preamble + new_source[line_start:]
+            start += len(preamble)
+            after += len(preamble)
+            offset_shift += len(preamble)
         replacement = (f"stripe.PaymentIntent.create(\n{arg_indent}"
                        f"{new_args}\n{base_indent})")
         new_source = new_source[:start] + replacement + new_source[after:]
@@ -186,17 +223,27 @@ def draft_stripe_charges_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
 
 def generate_stripe_contract_test(module: str, func_name: str,
                                   amount: int = 2000, currency: str = "usd",
-                                  token: str = "pm_card_visa") -> tuple[str, str]:
+                                  payment_method_id: str = "pm_card_visa") -> tuple[str, str]:
     """Generate a pytest contract test sketch for the migrated function.
 
     Returns (path, content). The test mocks stripe.PaymentIntent.create and
-    asserts the call contract the migration promises.
+    asserts the call contract the migration promises. Uses unittest.mock —
+    no network calls.
+
+    payment_method_id must be a PaymentMethod ID (pm_...): Stripe documents
+    `payment_method` as a PaymentMethod, Card, or compatible Source ID — NOT
+    a raw tok_... token. https://stripe.com/docs/api/payment_intents/create
     """
     path = "tests/test_stripe_payment_intent_contract.py"
     content = f'''"""Contract test sketch for the Stripe PaymentIntent migration.
 
 Verifies the app calls stripe.PaymentIntent.create with the SCA-ready
 parameter contract. Run with pytest. Uses unittest.mock — no network calls.
+
+NOTE: this asserts the call *shape* only. It does not prove Stripe accepts
+the payment_method value — that must be a real PaymentMethod ID (pm_...),
+converted from any legacy tok_... token beforehand (manual step, see the
+TODO in the migrated code).
 """
 from unittest.mock import patch
 
@@ -207,7 +254,7 @@ from {module} import {func_name}
 def test_payment_intent_contract(mock_create):
     mock_create.return_value = {{"id": "pi_test_123", "status": "succeeded"}}
 
-    {func_name}({amount}, "{currency}", "{token}")
+    {func_name}({amount}, "{currency}", "{payment_method_id}")
 
     assert mock_create.call_count == 1
     _, kwargs = mock_create.call_args
@@ -217,7 +264,10 @@ def test_payment_intent_contract(mock_create):
     assert kwargs["currency"] == "{currency}"
     # legacy `source` must be gone; payment_method is the SCA-ready equivalent
     assert "source" not in kwargs, "legacy Charges param leaked into PaymentIntent call"
-    assert kwargs["payment_method"] == "{token}"
+    # must be a PaymentMethod ID (pm_...) — never a raw tok_... token
+    assert kwargs["payment_method"] == "{payment_method_id}"
+    assert kwargs["payment_method"].startswith("pm_"), \\
+        "payment_method must be a PaymentMethod ID (pm_...), not a legacy token"
     assert kwargs["confirm"] is True
     assert kwargs["automatic_payment_methods"]["enabled"] is True
 '''
@@ -419,7 +469,7 @@ def test_verify_check_contract(mock_client_cls):
 # SendGrid: v2 mail/send -> v3 mail/send
 # ---------------------------------------------------------------------------
 
-_SG_V2_URL_RE = re.compile(r"api\.sendgrid\.com/v2/mail/send")
+_SG_V2_URL_RE = re.compile(r"api\.sendgrid\.com/api/mail\.send\.json")
 _SG_CLIENT_RE = re.compile(r"sendgrid\.SendGridClient\s*\(")
 _SG_PAYLOAD_RE = re.compile(r"(data|json)\s*=\s*\{")
 
@@ -593,6 +643,7 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
     new_source = original
     count = 0
 
+    call_starts: list[int] = []
     for m in reversed(list(_PLAID_GET_CALL_RE.finditer(new_source))):
         obj = m.group(1)
         open_idx = new_source.index("(", m.start())
@@ -601,19 +652,33 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
         access_token = parts[0] if parts else "access_token"
         replacement = f"{obj}.transactions_sync({access_token}, cursor=cursor)"
         new_source = new_source[:m.start()] + replacement + new_source[after:]
+        call_starts.append(m.start())
         count += 1
     if _PLAID_GET_URL_RE.search(new_source):
         new_source = _PLAID_GET_URL_RE.sub("/transactions/sync", new_source)
         count += 1
+
+    if call_starts:
+        # /transactions/sync is cursor-based: without a `cursor` binding the
+        # drafted call raises NameError at runtime. Initialize it before the
+        # first rewritten call so the output is valid Python.
+        first = min(call_starts)
+        line_start = new_source.rfind("\n", 0, first) + 1
+        line_head = new_source[line_start:first]
+        indent = line_head[:len(line_head) - len(line_head.lstrip())]
+        init_line = (indent + "cursor = None  # TODO: load your persisted cursor "
+                     "here for incremental sync\n")
+        new_source = new_source[:line_start] + init_line + new_source[line_start:]
 
     if count == 0:
         draft.notes.append("no /transactions/get usage found — nothing to draft")
         return draft
 
     draft.notes.insert(0, f"rewrote {count} /transactions/get call(s) to /transactions/sync")
-    draft.notes.append("/transactions/sync is cursor-based, not date-range: initialize "
-                       "`cursor = None`, loop while `response['has_more']`, and persist "
-                       "`response['next_cursor']` between runs for incremental sync")
+    draft.notes.append("added `cursor = None` before the first sync call so the drafted "
+                       "code is valid — persist `response['next_cursor']` between runs "
+                       "and load it there for incremental sync; loop while "
+                       "`response['has_more']`")
     draft.notes.append("response shape differs — /transactions/get returns `transactions`; "
                        "/transactions/sync returns `added` / `modified` / `removed`. "
                        "Update downstream code accordingly")

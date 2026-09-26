@@ -13,7 +13,8 @@ Every API you depend on is a liability with a timer on it. Stripe deprecates
 an endpoint, Twilio sunsets a product, SendGrid kills v2 — and the blast
 radius hides across dozens of repos until something breaks at 2am.
 Integration-rot scans your dependencies *and* your source, matches usage
-against a curated deprecation knowledge base (17 real entries and growing),
+against a curated deprecation knowledge base (17 entries and growing — each
+linked to its vendor source, dates only where the vendor published them),
 ranks the risk, drafts a working patch with a contract test, and can open the
 pull request for you.
 
@@ -83,11 +84,12 @@ Dependencies found in demo/sample-app:
   pypi     stripe 2.56.0 [Stripe]  (requirements.txt)
 
 Direct vendor API calls:
-  [SendGrid] app.py:28: "https://api.sendgrid.com/v2/mail/send",
+  [SendGrid] app.py:28: "https://api.sendgrid.com/api/mail.send.json",
 ```
 
 The scanner parses `package.json` (+ lockfiles), `requirements.txt`, `go.mod`,
-`Gemfile`, and `pom.xml`, maps ~45 SDK packages to vendors, and heuristically
+`Gemfile`, and `pom.xml`, maps 64 SDK packages to vendors (plus 13 API
+hostnames), and heuristically
 spots hardcoded vendor hostnames in source.
 
 **2. MATCH** — cross-reference against the deprecation DB (`check`).
@@ -98,11 +100,11 @@ $ integration-rot check demo/sample-app
 
 ```
 Integration-rot report for demo/sample-app
-  critical=1 high=0 medium=1 low=0
+  critical=0 high=0 medium=2 low=0
 
-  [CRITICAL] SendGrid: SendGrid v2 API sunset — migrate to v3 (sunset 2021-06-30)
+  [MEDIUM  ] SendGrid: SendGrid v2 API deprecated — migrate to v3 (no sunset published) (no sunset date)
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
-             - app.py:28: `"https://api.sendgrid.com/v2/mail/send",` (matches sendgrid-v2-api)
+             - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
   [MEDIUM  ] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)
@@ -122,11 +124,18 @@ $ integration-rot fix demo/sample-app --entry stripe-charges-api \
 ```diff
 --- a/app.py
 +++ b/app.py
-@@ -13,11 +13,13 @@
+@@ -13,11 +13,20 @@
 
  def create_charge(amount_cents, currency, token, description=""):
      """Charge a card using the legacy Charges API (deprecated pattern)."""
 -    charge = stripe.Charge.create(
++    # TODO(manual, required): `token` was a legacy Charges-API card token.
++    # It MUST now be a PaymentMethod ID (pm_...): convert it first — e.g. Stripe's
++    # Dashboard data migration tool for saved cards, or the Payment Element /
++    # Checkout for new cards. Stripe documents `payment_method` as a
++    # PaymentMethod, Card, or compatible Source ID — NOT a raw tok_... token.
++    # https://stripe.com/docs/api/payment_intents/create
++    # https://stripe.com/docs/payments/payment-methods/transitioning
 +    charge = stripe.PaymentIntent.create(
          amount=amount_cents,
          currency=currency,
@@ -140,12 +149,22 @@ $ integration-rot fix demo/sample-app --entry stripe-charges-api \
 ```
 
 …plus a generated `tests/test_stripe_payment_intent_contract.py` that mocks
-`stripe.PaymentIntent.create` and asserts the SCA-ready parameter contract.
-Five migrations ship with fixers today: **Stripe** Charges→PaymentIntents,
+`stripe.PaymentIntent.create` and asserts the SCA-ready parameter contract —
+call *shape* only (it can't prove Stripe accepts the value). The draft
+explicitly flags converting the legacy `tok_...` token to a PaymentMethod
+(`pm_...`) as a required manual step, with links to Stripe's own migration
+docs — the tool does not claim a raw token works as `payment_method`.
+Eight migrations ship with fixers today: **Stripe** Charges→PaymentIntents,
 **Twilio** Authy→Verify v2, **SendGrid** v2→v3, **Plaid**
-`/transactions/get`→`/transactions/sync`, **Slack** RTM→Socket Mode.
+`/transactions/get`→`/transactions/sync`, **Slack** RTM→Socket Mode,
+**GitHub** `?access_token=`→`Authorization` header, **Salesforce** retired
+API versions→v59.0, and **Mailchimp** API 2.0→3.0 (migration draft — v3
+operations need manual endpoint mapping).
 
-**4. PROPOSE** — open the PR with evidence attached.
+**4. PROPOSE** — open the PR from your already-pushed branch, with evidence
+attached. (It doesn't create the branch, commit, or push, and it doesn't run
+the contract test — `verify` runs tests in a sandbox; test-gating `propose`
+is on the v0.4 roadmap.)
 
 ```bash
 $ export GITHUB_TOKEN=ghp_...
@@ -177,7 +196,7 @@ added/removed/changed endpoints, parameters, and fields.
 
 The repo ships with `demo/sample-app`, an app that *intentionally* uses
 outdated integrations: `stripe.Charge.create` (legacy Charges API) and
-`api.sendgrid.com/v2/mail/send` (retired SendGrid v2). Run the whole pipeline:
+`api.sendgrid.com/api/mail.send.json` (legacy SendGrid v2 API). Run the whole pipeline:
 
 ```bash
 # 1. install
@@ -286,7 +305,7 @@ Dependencies found in demo/sample-app:
   pypi     stripe 2.56.0 [Stripe]  (requirements.txt)
 
 Direct vendor API calls:
-  [SendGrid] app.py:28: "https://api.sendgrid.com/v2/mail/send",
+  [SendGrid] app.py:28: "https://api.sendgrid.com/api/mail.send.json",
 ```
 
 Parses `package.json` (+ `package-lock.json` / `yarn.lock` version
@@ -311,15 +330,15 @@ $ integration-rot check /path/to/repo --format json
 {
   "repo": "<repo>",
   "generated": "<timestamp>",
-  "counts": {"critical": 1, "high": 0, "medium": 1, "low": 0},
+  "counts": {"critical": 0, "high": 0, "medium": 2, "low": 0},
   "findings": [
     {
       "id": "sendgrid-v2-api",
       "vendor": "SendGrid",
-      "title": "SendGrid v2 API sunset — migrate to v3",
-      "risk": "critical",
-      "days_to_sunset": -1914,
-      "sunset": "2021-06-30",
+      "title": "SendGrid v2 API deprecated — migrate to v3 (no sunset published)",
+      "risk": "medium",
+      "days_to_sunset": null,
+      "sunset": null,
       ...
     }
   ]
@@ -377,13 +396,13 @@ Applied. Wrote: mailer.py, tests/test_sendgrid_v3_contract.py
 | `--param KEY=VALUE` | Extra fixer-specific params, repeatable (e.g. Twilio's `start_func`/`check_func`) |
 | `--apply` | Write the patch and contract test to the repo (default is dry-run print) |
 
-Fixers available in v0.3.0:
+Fixers available in v0.3.1:
 
 | Entry id | Migration |
 |----------|-----------|
 | `stripe-charges-api` | `stripe.Charge.create` → `stripe.PaymentIntent.create` (SCA-ready) |
 | `twilio-authy-api` | Authy API → Twilio Verify v2 |
-| `sendgrid-v2-api` | `/v2/mail/send` flat payload → `/v3/mail/send` nested payload |
+| `sendgrid-v2-api` | `/api/mail.send.json` flat payload → `/v3/mail/send` nested payload |
 | `plaid-legacy-transactions` | `/transactions/get` → cursor-based `/transactions/sync` |
 | `slack-rtm-api` | RTMClient → Socket Mode |
 | `github-api-query-auth` | `?access_token=` in URLs → `Authorization` header (also a credential-leak fix) |
@@ -555,24 +574,25 @@ Google, LinkedIn, Mailchimp, Instagram, GitHub, and Salesforce.
   "id": "sendgrid-v2-api",
   // canonical vendor name — must match scanner/vendor_map.py
   "vendor": "SendGrid",
-  "title": "SendGrid v2 API sunset — migrate to v3",
-  // ISO date (YYYY-MM-DD; YYYY-MM allowed) the deprecation was announced
-  "announced": "2020-04-01",
+  "title": "SendGrid v2 API deprecated — migrate to v3 (no sunset published)",
+  // ISO date (YYYY-MM-DD; YYYY-MM allowed) the deprecation was announced,
+  // or "" when the vendor never published an announcement date
+  "announced": "",
   // ISO date the API stops working, or null if not announced
-  "sunset": "2021-06-30",
+  "sunset": null,
   // "breaking" | "warning" | "informational" — feeds risk ranking
-  "severity": "breaking",
+  "severity": "warning",
   // SDK deps that imply exposure. Empty = vendor-wide (needs code-pattern evidence).
   "packages": [
     {"ecosystem": "pypi", "name": "sendgrid", "version_spec": ""},
     {"ecosystem": "npm",  "name": "@sendgrid/mail", "version_spec": ""}
   ],
   // regexes matched against repo source. Empty = any usage counts.
-  "code_patterns": ["api\\.sendgrid\\.com/v2"],
+  "code_patterns": ["api\\.sendgrid\\.com/api/"],
   // human migration guidance shown in reports and PR bodies
-  "migration": "The v2 API is retired. Migrate all calls to v3 endpoints ...",
-  // source of truth — every entry links its announcement
-  "source_url": "https://docs.sendgrid.com/for-developers/sending-email/api-getting-started",
+  "migration": "SendGrid encourages v2 API customers to migrate to v3; no sunset date ...",
+  // source of truth — every entry links its vendor source
+  "source_url": "https://www.twilio.com/docs/sendgrid/for-developers/sending-email/migrating-from-v2-to-v3-mail-send",
   // whether fixer.py can draft a patch for this entry
   "fix_available": true
 }
@@ -813,10 +833,10 @@ integration-rot/
 │   ├── __init__.py        version
 │   ├── cli.py             scan | check | fix | drift | propose | demo
 │   ├── scanner.py         manifest parsing, vendor mapping, API-host heuristic
-│   ├── vendor_map.py      ~45 SDK packages -> canonical vendors
+│   ├── vendor_map.py      64 SDK packages + 13 API hostnames -> canonical vendors
 │   ├── deprecations.py    DB loader + FeedFetcher architecture (live feeds plug in here)
 │   ├── analyzer.py        matching, risk ranking, console/JSON/Markdown renderers
-│   ├── fixer.py           5 migration drafters + contract-test generators + registry
+│   ├── fixer.py           8 migration drafters + contract-test generators + registry
 │   ├── schema_drift.py    OpenAPI snapshot diffing (endpoints / params / fields)
 │   ├── proposer.py        GitHub PR creation via REST (urllib only)
 │   └── models.py          shared dataclasses
@@ -826,7 +846,7 @@ integration-rot/
 │       └── stripe.json            pinned Stripe excerpt (4 endpoints, real fields)
 ├── demo/
 │   └── sample-app/                intentionally-outdated demo target
-├── tests/                         pytest suite (58 tests)
+├── tests/                         pytest suite (83 tests)
 ├── docs/
 │   └── index.html                 project landing page (GitHub Pages)
 ├── demo.sh                        one-command demo
@@ -843,7 +863,7 @@ integration-rot/
 - Response-schema drift against *observed* traffic, not just specs
 
 **v0.4 — deeper fixes**
-- Fixers for the long tail of the DB (Twitter, Reddit, GitHub auth, …)
+- Fixers for the long tail of the DB (Twitter, Reddit, more auth migrations, …)
 - Multi-file migrations (a deprecation rarely lives in one file)
 - Fix verification: run the contract test *before* proposing the PR
 
