@@ -61,7 +61,7 @@ def load_spec(path_or_url: str | Path) -> dict:
     if s.startswith(("http://", "https://")):
         with urllib.request.urlopen(s, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    return json.loads(Path(s).read_text())
+    return json.loads(Path(s).read_text(encoding="utf-8"))
 
 
 def load_snapshot(vendor: str,
@@ -73,7 +73,7 @@ def load_snapshot(vendor: str,
         raise FileNotFoundError(
             f"no pinned OpenAPI snapshot for vendor '{vendor}' at {path} "
             f"(add one under data/openapi_snapshots/)")
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ def save_snapshot(vendor: str, spec_source: str | Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     path = dest / f"{ts}.json"
-    path.write_text(json.dumps(doc, indent=2))
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     return path
 
 
@@ -298,9 +298,9 @@ def check_drift_history(vendor: str, spec_source: str | Path
     prev_list = list_snapshots(vendor)
     prev = prev_list[-1] if prev_list else None
     new_path = save_snapshot(vendor, spec_source)
-    new_doc = json.loads(new_path.read_text())
+    new_doc = json.loads(new_path.read_text(encoding="utf-8"))
     if prev is None:
         return SchemaDiff(vendor=vendor), new_path, None
-    old_doc = json.loads(prev.read_text())
+    old_doc = json.loads(prev.read_text(encoding="utf-8"))
     diff = diff_specs(old_doc["endpoints"], new_doc["endpoints"], vendor=vendor)
     return diff, new_path, prev

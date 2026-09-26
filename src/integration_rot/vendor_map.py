@@ -45,8 +45,21 @@ PACKAGE_TO_VENDOR: dict[str, str] = {
     "@okta/okta-sdk-nodejs": "Okta",
     "auth0": "Auth0",
     "@auth0/auth0-spa-js": "Auth0",
+    # Social / developer-adjacent SDKs (several DB entries target these)
+    "tweepy": "Twitter",
+    "twython": "Twitter",
+    "twitter-api-v2": "Twitter",
+    "twit": "Twitter",
+    "twitter": "Twitter",
+    "praw": "Reddit",
+    "google-api-python-client": "Google",
+    "gcm": "Google",
+    "python-linkedin": "LinkedIn",
+    "mailchimp": "Mailchimp",
+    "python-instagram": "Instagram",
     # Banking / fintech
     "plaid": "Plaid",
+    "plaid-python": "Plaid",
     # AI
     "openai": "OpenAI",
     "anthropic": "Anthropic",

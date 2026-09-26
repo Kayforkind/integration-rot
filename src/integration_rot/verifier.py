@@ -67,6 +67,10 @@ def verify_fix(repo_path: str | Path, entry_id: str, rel_path: str,
         res.tests = [t for t, _ in draft.tests]
         env = dict(os.environ)
         env["PYTHONPATH"] = tmp + os.pathsep + env.get("PYTHONPATH", "")
+        # The generated contract tests are written as UTF-8; force the child
+        # interpreter into UTF-8 mode so they import cleanly even on Windows
+        # installs whose default locale is a non-UTF-8 code page.
+        env.setdefault("PYTHONUTF8", "1")
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", *res.tests, "-q",
              "--no-header", "-p", "no:cacheprovider"],

@@ -13,7 +13,7 @@ from .agent import cmd_agent
 from .analyzer import analyze, print_console, to_json, to_markdown
 from .api_server import serve_forever
 from .deprecations import draft_entries_from_feed, fetch_all, load_db
-from .fixer import draft_fix, write_fix
+from .fixer import detect_func_name, draft_fix, write_fix
 from .mcp_server import serve_stdio
 from .proposer import build_pr_body, open_pr
 from .scanner import scan_repo
@@ -73,8 +73,19 @@ def _parse_params(pairs: list[str] | None) -> dict:
     return out
 
 
+def _resolve_func(args):
+    """--func wins; otherwise auto-detect from the finding (first code-pattern
+    match -> enclosing def); None lets each fixer's own default apply."""
+    if getattr(args, "func", None):
+        return args.func
+    return detect_func_name(args.repo, args.file, args.entry)
+
+
 def cmd_fix(args) -> int:
-    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs = {"module": args.module}
+    func_name = _resolve_func(args)
+    if func_name:
+        kwargs["func_name"] = func_name
     kwargs.update(_parse_params(args.param))
     try:
         draft = draft_fix(args.entry, args.repo, args.file, **kwargs)
@@ -142,13 +153,16 @@ def cmd_fetch(args) -> int:
         print(f"  signals: {', '.join(d['matched_signals'])}")
         print(f"  link: {d['link']}")
     if args.output:
-        Path(args.output).write_text(json.dumps(drafts, indent=2))
+        Path(args.output).write_text(json.dumps(drafts, indent=2), encoding="utf-8")
         print(f"\nWrote {args.output}")
     return 0
 
 
 def cmd_verify(args) -> int:
-    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs = {"module": args.module}
+    func_name = _resolve_func(args)
+    if func_name:
+        kwargs["func_name"] = func_name
     kwargs.update(_parse_params(args.param))
     try:
         res = verify_fix(args.repo, args.entry, args.file, **kwargs)
@@ -167,7 +181,10 @@ def cmd_propose(args) -> int:
         print("error: GITHUB_TOKEN is not set — export a token with `repo` "
               "scope to open PRs", file=sys.stderr)
         return 2
-    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs = {"module": args.module}
+    func_name = _resolve_func(args)
+    if func_name:
+        kwargs["func_name"] = func_name
     kwargs.update(_parse_params(args.param))
     try:
         draft = draft_fix(args.entry, args.repo, args.file, **kwargs)
@@ -260,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--entry", required=True, help="deprecation entry id, e.g. stripe-charges-api")
     f.add_argument("--file", required=True, help="repo-relative source file to patch")
     f.add_argument("--module", default="app", help="python module name for test import")
-    f.add_argument("--func", default="create_charge", help="function name for test import")
+    f.add_argument("--func", default=None, help="function name for test import (auto-detected from the finding when omitted)")
     f.add_argument("--param", action="append", default=[],
                    metavar="KEY=VALUE",
                    help="extra fixer param, e.g. --param start_func=begin_otp (repeatable)")
@@ -301,7 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--entry", required=True, help="deprecation entry id, e.g. stripe-charges-api")
     v.add_argument("--file", required=True, help="repo-relative source file to patch")
     v.add_argument("--module", default="app", help="python module name for test import")
-    v.add_argument("--func", default="create_charge", help="function name for test import")
+    v.add_argument("--func", default=None, help="function name for test import (auto-detected from the finding when omitted)")
     v.add_argument("--param", action="append", default=[],
                    metavar="KEY=VALUE",
                    help="extra fixer param (repeatable)")
@@ -318,7 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--title", default=None, help="PR title (default: generated)")
     pr.add_argument("--draft", action="store_true", help="open as a draft PR")
     pr.add_argument("--module", default="app", help="python module name for test import")
-    pr.add_argument("--func", default="create_charge", help="function name for test import")
+    pr.add_argument("--func", default=None, help="function name for test import (auto-detected from the finding when omitted)")
     pr.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
                     help="extra fixer param (repeatable)")
     pr.set_defaults(fn=cmd_propose)

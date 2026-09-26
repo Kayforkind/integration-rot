@@ -83,3 +83,17 @@ def test_vendor_maps():
     assert vendor_for_package("definitely-not-a-vendor") is None
     assert vendor_for_host("api.stripe.com") == "Stripe"
     assert vendor_for_host("example.com") is None
+
+
+def test_every_db_package_is_in_vendor_map():
+    """Every package name referenced by a deprecation DB entry must resolve
+    to a vendor — otherwise manifest-only repos report zero findings."""
+    import json
+    from integration_rot.vendor_map import PACKAGE_TO_VENDOR
+    db = json.load(open("data/deprecations.json", encoding="utf-8"))
+    missing = []
+    for e in db["deprecations"]:
+        for p in e.get("packages", []):
+            if p["name"] not in PACKAGE_TO_VENDOR:
+                missing.append((e["id"], p["name"]))
+    assert missing == [], f"DB packages missing from vendor map: {missing}"

@@ -89,7 +89,7 @@ def version_satisfies(version: str | None, spec: str | None) -> bool:
 # ---------------------------------------------------------------------------
 
 def _parse_package_json(path: Path, rel: str) -> list[Dependency]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     deps = []
     for section in ("dependencies", "devDependencies", "peerDependencies"):
         for name, spec in (data.get(section) or {}).items():
@@ -100,7 +100,7 @@ def _parse_package_json(path: Path, rel: str) -> list[Dependency]:
 
 def _parse_package_lock(path: Path, rel: str) -> dict[str, str]:
     """Return {package_name: resolved_version} from a lockfile."""
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     out = {}
     for key, val in (data.get("packages") or {}).items():
         if key.startswith("node_modules/") and "/" not in key[len("node_modules/"):]:
@@ -116,7 +116,7 @@ def _parse_package_lock(path: Path, rel: str) -> dict[str, str]:
 
 def _parse_requirements(path: Path, rel: str) -> list[Dependency]:
     deps = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("-"):
             continue
@@ -138,7 +138,7 @@ def _parse_requirements(path: Path, rel: str) -> list[Dependency]:
 
 def _parse_go_mod(path: Path, rel: str) -> list[Dependency]:
     deps = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         m = re.match(r"^([^\s]+)\s+v([^\s]+)", line)
         if m and not line.startswith("module") and not line.startswith("go "):
@@ -151,7 +151,7 @@ def _parse_go_mod(path: Path, rel: str) -> list[Dependency]:
 
 def _parse_gemfile(path: Path, rel: str) -> list[Dependency]:
     deps = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         m = re.match(r"""\s*gem\s+['"]([^'"]+)['"]\s*(?:,\s*['"]([^'"]+)['"])?""", line)
         if m:
             deps.append(Dependency(name=m.group(1), spec=m.group(2),
@@ -163,7 +163,7 @@ def _parse_gemfile(path: Path, rel: str) -> list[Dependency]:
 def _parse_pom_xml(path: Path, rel: str) -> list[Dependency]:
     deps = []
     try:
-        root = ET.fromstring(path.read_text())
+        root = ET.fromstring(path.read_text(encoding="utf-8"))
     except ET.ParseError:
         return deps
     ns = {"m": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {"m": ""}
@@ -255,7 +255,7 @@ def _find_direct_calls(repo: Path, source_files: list[str]) -> list[DirectCall]:
     calls = []
     for rel in source_files:
         try:
-            lines = (repo / rel).read_text(errors="replace").splitlines()
+            lines = (repo / rel).read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for i, line in enumerate(lines, start=1):

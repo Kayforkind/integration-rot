@@ -203,6 +203,9 @@ outdated integrations: `stripe.Charge.create` (legacy Charges API) and
 # 1. install
 python -m pip install -e ".[dev]"
 
+# Windows: set PYTHONUTF8=1 before pytest — generated contract tests are
+# UTF-8 and the default ANSI code page can't decode them.
+
 # 2. full pipeline on the sample app
 integration-rot demo
 # or: ./demo.sh
@@ -245,7 +248,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.4.2
+integration-rot --version   # integration-rot 0.4.3
 ```
 
 ---
@@ -303,7 +306,7 @@ dependency). Tools: `scan_repo`, `check_findings`, `draft_fix`,
 
 ```text
 $ integration-rot mcp   # then: initialize
-< serverInfo: {'name': 'integration-rot', 'version': '0.4.1'} | protocol: 2025-06-18
+< serverInfo: {'name': 'integration-rot', 'version': '0.4.3'} | protocol: 2025-06-18
 $ tools/list
 < tools: ['scan_repo', 'check_findings', 'draft_fix', 'lookup_deprecation', 'get_fixers']
 $ tools/call get_fixers
@@ -321,7 +324,7 @@ codes (`POST /fix` drafts only — it never writes to disk). Real session:
 ```text
 $ integration-rot serve --port 8471 &
 $ curl -s localhost:8471/health
-{"status": "ok", "version": "0.4.1"}
+{"status": "ok", "version": "0.4.3"}
 $ curl -s -X POST localhost:8471/check -d {"path":"demo/sample-app","today":"2026-09-26"}
 counts: {'critical': 0, 'high': 0, 'medium': 2, 'low': 0} | would_exit: 0 | findings: ['sendgrid-v2-api', 'stripe-charges-api']
 $ curl -s localhost:8471/fixers
@@ -487,7 +490,7 @@ Fixers available in v0.3.1:
 | `slack-rtm-api` | RTMClient → Socket Mode |
 | `github-api-query-auth` | `?access_token=` in URLs → `Authorization` header (also a credential-leak fix) |
 | `salesforce-api-v21-v30` | retired `/services/data/v21.0`–`v30.0` → `v59.0` |
-| `mailchimp-api-v2-retirement` | `/2.0/` endpoints → `/3.0/`, `apikey` payload → HTTP basic auth |
+| `mailchimp-api-2-retirement` | `/2.0/` endpoints → `/3.0/`, `apikey` payload → HTTP basic auth |
 
 ### `verify` — executed verification with a migration-evidence bundle
 
@@ -930,7 +933,7 @@ integration-rot/
 │       └── stripe.json            pinned Stripe excerpt (4 endpoints, real fields)
 ├── demo/
 │   └── sample-app/                intentionally-outdated demo target
-├── tests/                         pytest suite (113 tests)
+├── tests/                         pytest suite (129 tests)
 ├── docs/
 │   └── index.html                 project landing page (GitHub Pages)
 ├── demo.sh                        one-command demo
@@ -967,7 +970,29 @@ integration-rot/
   valid and satisfies its own sketch," not "the migration is correct in
   production." Review every diff.
 
-**v0.4.2 — detection + fixer depth + console honesty (125 tests):**
+**v0.4.2 — detection + fixer depth + console honesty (126 tests):**
+**v0.4.3 — Windows/locale encoding, entry-id honesty, vendor map (129 tests):**
+- Every file read/write in the package now passes `encoding="utf-8"` explicitly —
+  generated contract tests no longer land in the ANSI code page on Windows, and
+  deprecation DB titles no longer come back mojibake under non-UTF-8 locales.
+  The spawned pytest env also sets `PYTHONUTF8=1` as defense in depth.
+- `fix`, `verify`, and `propose` auto-detect the function under test from the
+  finding (`--func` still wins when given) — the `create_charge` default is gone
+  from all four entry points (agent already did this; API/MCP were fixed in v0.4.2).
+- Vendor map now covers every package the DB references (tweepy/twython/
+  twitter-api-v2/twit/twitter, praw, google-api-python-client, gcm,
+  python-linkedin, mailchimp, python-instagram, plaid-python) — a regression
+  test asserts this invariant going forward.
+- Reddit entry re-framed: the cited source contradicts a shutdown narrative
+  (free tier continues for non-monetized apps under the threshold), so it is now
+  a `warning` with no invented past-sunset date instead of `breaking`/CRITICAL.
+- Fixed the documented-but-nonexistent entry id `mailchimp-api-v2-retirement`
+  (DB/dispatch/readme/fixer all say `mailchimp-api-2-retirement` now).
+- Docs: page architecture card lists all 13 modules; check transcript shows
+  `[auto-fix available]`; roadmap places test-gated propose in v0.5 on both
+  page and README; README transcripts refreshed to v0.4.3; page discloses the
+  one non-vendor source (Twitter). Windows UTF-8 note added to Quickstart.
+
 - Manifest-less repos: code-pattern entries (e.g. `RTMClient`, `transactions_get`)
   are now flagged even when no dependency manifest names their package — and
   CLI `check` falls back to the full DB when no vendors can be inferred.

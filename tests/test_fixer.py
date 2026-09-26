@@ -552,3 +552,48 @@ def test_e2e_slack_sdk_contract(tmp_path):
         tmp_path, "slack-rtm-api", "test_slack_socket_mode_contract.py",
         'from slack_sdk.rtm import RTMClient\nrtm = RTMClient(token="xoxb-old")\n'
         '@rtm.on("message")\ndef handle(**payload):\n    pass\nrtm.start()\n')
+
+
+def test_every_fix_available_entry_dispatches_with_matching_id(tmp_path):
+    """Every DB entry claiming fix_available must dispatch to a fixer, and
+    the returned draft's entry_id must equal the requested id (regression:
+    the mailchimp fixer once declared a different id than the DB)."""
+    import json
+    from integration_rot.fixer import draft_fix
+    db = json.load(open("data/deprecations.json", encoding="utf-8"))
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    ids = [e["id"] for e in db["deprecations"] if e["fix_available"]]
+    assert len(ids) == 8
+    for entry_id in ids:
+        draft = draft_fix(entry_id, tmp_path, "app.py", module="app")
+        assert draft.entry_id == entry_id
+
+
+def test_cli_fix_and_verify_autodetect_func(tmp_path, capsys):
+    """fix/verify --entry must auto-detect the function under test (AST)
+    instead of defaulting to create_charge — the default produced an
+    unrunnable generated test on repos whose function has another name."""
+    from integration_rot import cli
+    (tmp_path / "app.py").write_text(
+        'plaid_client = None\ndef sync_transactions(access_token):\n'
+        '    resp = plaid_client.transactions_get({"access_token": access_token})\n'
+        '    return resp["added"]\n', encoding="utf-8")
+
+    class A:  # minimal argparse namespace for cmd_fix
+        repo = str(tmp_path); entry = "plaid-legacy-transactions"
+        file = "app.py"; module = "app"; func = None; apply = False; param = []
+    rc = cli.cmd_fix(A())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "from app import sync_transactions" in out
+    assert "from app import create_charge" not in out
+
+
+def test_deprecation_db_reads_utf8(tmp_path):
+    """DB titles must not come back mojibake: the reader must decode as
+    UTF-8 even when the process locale is a non-UTF-8 code page."""
+    from integration_rot.deprecations import load_db
+    db = load_db()
+    titles = [e.title for e in db]
+    assert any("—" in t for t in titles), "expected an em-dash in some title"
+    assert not any("â€" in t or "Ã" in t for t in titles), "mojibake detected"

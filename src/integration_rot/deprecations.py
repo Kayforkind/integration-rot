@@ -20,7 +20,7 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "depr
 
 def load_db(path: str | Path = DEFAULT_DB_PATH) -> list[DeprecationEntry]:
     """Load the curated deprecation DB from JSON."""
-    raw = json.loads(Path(path).read_text())
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
     entries = []
     for item in raw["deprecations"]:
         entries.append(DeprecationEntry(**item))
@@ -177,7 +177,7 @@ def fetch_feed_items(feed: str) -> list[dict]:
         with urllib.request.urlopen(feed, timeout=30) as resp:
             xml_text = resp.read().decode("utf-8", errors="replace")
     else:
-        xml_text = Path(feed).read_text()
+        xml_text = Path(feed).read_text(encoding="utf-8")
     return parse_feed(xml_text)
 
 

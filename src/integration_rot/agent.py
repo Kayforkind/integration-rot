@@ -137,7 +137,7 @@ def _enclosing_def(source_path: Path, lineno: int | None) -> str | None:
     if lineno is None:
         return None
     try:
-        tree = ast.parse(source_path.read_text(errors="replace"))
+        tree = ast.parse(source_path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, SyntaxError):
         return None
     best = None
@@ -213,11 +213,14 @@ def _run_contract_tests(workdir: Path, draft, timeout: int = 180) -> tuple[bool,
         for test_path, content in draft.tests:
             full = Path(tmp) / test_path
             full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content)
+            full.write_text(content, encoding="utf-8")
         if not draft.tests:
             return False, "fixer produced no contract tests; refusing to keep an untested fix"
         env = dict(os.environ)
         env["PYTHONPATH"] = tmp + os.pathsep + env.get("PYTHONPATH", "")
+        # Generated tests are UTF-8; force UTF-8 mode in the child so they
+        # import cleanly on Windows installs with a non-UTF-8 default locale.
+        env.setdefault("PYTHONUTF8", "1")
         proc = subprocess.run(
             [sys.executable, "-m", "pytest",
              *[t for t, _ in draft.tests],
@@ -233,8 +236,8 @@ def _unified_diffs(original: Path, workdir: Path, rel_paths: list[str]) -> list[
     for rel in sorted(set(rel_paths)):
         old = original / rel
         new = workdir / rel
-        old_text = old.read_text(errors="replace").splitlines() if old.exists() else []
-        new_text = new.read_text(errors="replace").splitlines() if new.exists() else []
+        old_text = old.read_text(encoding="utf-8", errors="replace").splitlines() if old.exists() else []
+        new_text = new.read_text(encoding="utf-8", errors="replace").splitlines() if new.exists() else []
         if old_text != new_text:
             diff = difflib.unified_diff(
                 old_text, new_text,
@@ -328,7 +331,7 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
             backups = {}
             for change in draft.changes:
                 full = workdir / change.path
-                backups[change.path] = full.read_text() if full.exists() else None
+                backups[change.path] = full.read_text(encoding="utf-8") if full.exists() else None
             pre_existing_tests = {t for t, _ in draft.tests
                                   if (workdir / t).exists()}
             written = write_fix(workdir, draft)
@@ -353,7 +356,7 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
                     if backups[change.path] is None:
                         full.unlink(missing_ok=True)
                     else:
-                        full.write_text(backups[change.path])
+                        full.write_text(backups[change.path], encoding="utf-8")
                 for test_path, _ in draft.tests:  # remove drafted tests too
                     if test_path not in pre_existing_tests:
                         (workdir / test_path).unlink(missing_ok=True)

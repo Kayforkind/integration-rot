@@ -43,7 +43,7 @@ def _pattern_hits(entry: DeprecationEntry, repo: str,
     compiled = [re.compile(p) for p in entry.code_patterns]
     for rel in source_files:
         try:
-            lines = Path(repo, rel).read_text(errors="replace").splitlines()
+            lines = Path(repo, rel).read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for i, line in enumerate(lines, start=1):

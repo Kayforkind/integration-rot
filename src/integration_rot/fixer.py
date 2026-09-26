@@ -124,7 +124,7 @@ def detect_func_name(repo_path: str | Path, rel_path: str,
         return None
     full = Path(repo_path) / rel_path
     try:
-        lines = full.read_text(errors="replace").splitlines()
+        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
     compiled = [re.compile(p) for p in entry.code_patterns]
@@ -136,7 +136,7 @@ def detect_func_name(repo_path: str | Path, rel_path: str,
     if lineno is None:
         return None
     try:
-        tree = ast.parse(full.read_text(errors="replace"))
+        tree = ast.parse(full.read_text(encoding="utf-8", errors="replace"))
     except (OSError, SyntaxError):
         return None
     best = None
@@ -308,7 +308,7 @@ def draft_stripe_charges_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     """Draft a Charges -> PaymentIntents migration for one Python file."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="stripe-charges-api")
     new_source = original
     offset_shift = 0
@@ -526,7 +526,7 @@ def draft_twilio_authy_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     """Draft an Authy API -> Twilio Verify v2 migration for one Python file."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="twilio-authy-api")
     new_source = original
     count = 0
@@ -772,7 +772,7 @@ def draft_sendgrid_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     """Draft a SendGrid v2 -> v3 mail/send migration for one Python file."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="sendgrid-v2-api")
     new_source = original
     count = 0
@@ -890,7 +890,7 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
     """Draft a Plaid /transactions/get -> /transactions/sync migration."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="plaid-legacy-transactions")
     new_source = original
     count = 0
@@ -1024,7 +1024,7 @@ def draft_slack_rtm_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     """Draft a Slack RTM -> Socket Mode migration for one Python file."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="slack-rtm-api")
     new_source = original
     count = 0
@@ -1203,7 +1203,7 @@ def draft_github_query_auth_fix(repo_path: str | Path, rel_path: str) -> FixDraf
     """Draft a GitHub ?access_token= -> Authorization header migration."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="github-api-query-auth")
     new_source = original
     count = 0
@@ -1290,13 +1290,13 @@ SRC = Path(__file__).resolve().parent.parent / "{rel_path}"
 
 
 def test_no_query_param_credentials():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert "access_token=" not in src, \\
         "credential still passed via URL query string"
 
 
 def test_authorization_header_present():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert "Authorization" in src, \\
         "migrated code must send an Authorization header"
 '''
@@ -1316,7 +1316,7 @@ def draft_salesforce_version_fix(repo_path: str | Path, rel_path: str) -> FixDra
     """Draft a Salesforce retired API version -> v59.0 migration."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
+    original = full.read_text(encoding="utf-8")
     draft = FixDraft(entry_id="salesforce-api-v21-v30")
     new_source = original
     count = 0
@@ -1361,12 +1361,12 @@ RETIRED_RE = re.compile(r"/services/data/v(2[1-9]|30)\\.")
 
 
 def test_no_retired_versions():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert not RETIRED_RE.search(src), "retired Salesforce API version still referenced"
 
 
 def test_supported_version_used():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert "/services/data/v59.0" in src or "'59.0'" in src or '"59.0"' in src, \\
         "expected the v59.0 target version in migrated code"
 '''
@@ -1386,8 +1386,8 @@ def draft_mailchimp_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     """Draft a Mailchimp API 2.0 -> 3.0 migration for one Python file."""
     repo = Path(repo_path)
     full = repo / rel_path
-    original = full.read_text()
-    draft = FixDraft(entry_id="mailchimp-api-v2-retirement")
+    original = full.read_text(encoding="utf-8")
+    draft = FixDraft(entry_id="mailchimp-api-2-retirement")
     new_source = original
     count = 0
 
@@ -1460,18 +1460,18 @@ SRC = Path(__file__).resolve().parent.parent / "{rel_path}"
 
 
 def test_no_v2_endpoints():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert "api.mailchimp.com/2.0" not in src, "Mailchimp API v2 endpoint still referenced"
 
 
 def test_no_apikey_in_payload():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert '"apikey"' not in src and "'apikey'" not in src, \\
         "v2 apikey auth still in payload — v3 uses HTTP basic auth"
 
 
 def test_v3_base_used():
-    src = SRC.read_text()
+    src = SRC.read_text(encoding="utf-8")
     assert "api.mailchimp.com/3.0" in src, "expected the v3 API base in migrated code"
 '''
     return path, content
@@ -1564,11 +1564,11 @@ def write_fix(repo_path: str | Path, draft: FixDraft) -> list[str]:
     written = []
     for change in draft.changes:
         full = repo / change.path
-        full.write_text(change.new_content)
+        full.write_text(change.new_content, encoding="utf-8")
         written.append(change.path)
     for test_path, content in draft.tests:
         full = repo / test_path
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content)
+        full.write_text(content, encoding="utf-8")
         written.append(test_path)
     return written

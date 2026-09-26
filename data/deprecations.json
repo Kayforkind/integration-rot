@@ -233,10 +233,10 @@
     {
       "id": "reddit-free-api-retirement",
       "vendor": "Reddit",
-      "title": "Reddit free API → paid Data API",
+      "title": "Reddit Data API pricing/terms change (free tier limited)",
       "announced": "",
-      "sunset": "2023-07-01",
-      "severity": "breaking",
+      "sunset": null,
+      "severity": "warning",
       "packages": [
         {
           "ecosystem": "pypi",
@@ -249,7 +249,7 @@
         "api\\.reddit\\.com",
         "oauth\\.reddit\\.com"
       ],
-      "migration": "Reddit replaced free Data API access with paid tiers: updated Data API Terms effective 2023-06-19, and paid rates ($0.24 per 1K calls) with free rate limits effective 2023-07-01. No Reddit-owned announcement date was verifiable. See https://redditinc.com/blog/apifacts",
+      "migration": "Reddit replaced unrestricted free Data API access with paid tiers and free rate limits: updated Data API Terms effective 2023-06-19, paid rates ($0.24 per 1K calls) with free rate limits effective 2023-07-01. Per Reddit, apps that are not monetized and stay below the published data-usage threshold continue to access the Data API for free — this is a commercial/rate-limit change, not an API shutdown. Review the current Data API terms before assuming a migration is required. See https://redditinc.com/blog/apifacts",
       "source_url": "https://redditinc.com/blog/apifacts",
       "fix_available": false
     },

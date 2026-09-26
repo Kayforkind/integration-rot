@@ -174,7 +174,7 @@
 
 <div class="wrap">
   <header class="hero">
-    <span class="kicker">v0.4.2 &mdash; 8 auto-fixers, MCP server, REST API, agent loop, manifest-less detection, executed verification</span>
+    <span class="kicker">v0.4.3 &mdash; 8 auto-fixers, MCP server, REST API, agent loop, executed verification</span>
     <h1>Your APIs are rotting.<br><span class="grad">Catch it before production does.</span></h1>
     <p class="sub">
       Integration-rot scans your repos for deprecated third-party API usage,
@@ -193,10 +193,10 @@
 Integration-rot report for demo/sample-app
   critical=0 high=0 medium=2 low=0
 
-  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date)
+  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date) [auto-fix available]
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
              - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
-  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
+  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date) [auto-fix available]
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)
 </pre>
@@ -269,10 +269,10 @@ Direct vendor API calls:
 Integration-rot report for demo/sample-app
   critical=0 high=0 medium=2 low=0
 
-  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date)
+  [<span class="c-med">MEDIUM  </span>] SendGrid: SendGrid v2 API deprecated &mdash; migrate to v3 (no sunset published) (no sunset date) [auto-fix available]
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
              - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
-  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
+  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date) [auto-fix available]
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)</pre>
       </div>
@@ -336,7 +336,7 @@ Notes:
         already-pushed branch, with the risk finding, diff and reviewer notes attached.
         (It doesn't create the branch, commit, or push, and it doesn't run the contract test
         &mdash; <code>verify</code> runs tests in a sandbox; test-gating <code>propose</code> is on
-        the v0.4 roadmap.)</p>
+        the v0.5 roadmap.)</p>
       <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">verify + drift + propose</span></div>
 <pre><span class="c-prompt">$</span> integration-rot verify ./myrepo --entry stripe-charges-api --file app.py
 
@@ -370,7 +370,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
     <h2>What you get</h2>
     <p class="lede">A complete loop from detection to merged PR &mdash; not another dashboard that just tells you you're doomed.</p>
     <div class="feats">
-      <div class="card"><span class="icon">📚</span><h3>Curated deprecation DB</h3><p>17 curated deprecations across 13 vendors, each linked to its vendor source. Dates appear only where the vendor published them &mdash; entries without a published date say so. No invented sunsets.</p></div>
+      <div class="card"><span class="icon">📚</span><h3>Curated deprecation DB</h3><p>17 curated deprecations across 13 vendors, each linked to its vendor source (Twitter's links a news report — no vendor announcement was published). Dates appear only where the vendor published them &mdash; entries without a published date say so. No invented sunsets.</p></div>
       <div class="card"><span class="icon">🎯</span><h3>Risk-ranked findings</h3><p>Critical/high/medium/low by days-to-sunset and severity. Exit code 1 on serious findings &mdash; gate your CI.</p></div>
       <div class="card"><span class="icon">🔧</span><h3>Migration drafters</h3><p>Real unified-diff patches for 8 migrations: Stripe, Twilio Verify, SendGrid v3, Plaid sync, Slack Socket Mode, GitHub auth headers, Salesforce versions, Mailchimp v3 (draft).</p></div>
       <div class="card"><span class="icon">🧪</span><h3>Contract tests</h3><p>Every draft ships a pytest contract test asserting the new API's parameter contract. Proof, not vibes.</p></div>
@@ -415,7 +415,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <section id="architecture">
   <div class="wrap">
     <h2>Architecture</h2>
-    <p class="lede">Ten modules, zero runtime dependencies. The fetcher abstraction means live vendor feeds plug in without touching the analyzer.</p>
+    <p class="lede">Thirteen modules, zero runtime dependencies. The fetcher abstraction means live vendor feeds plug in without touching the analyzer.</p>
     <div class="arch">
       <svg viewBox="0 0 720 200" width="720" height="200" font-family="ui-monospace, monospace" font-size="12">
         <defs>
@@ -468,22 +468,24 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
         <text x="363" y="30" fill="#8b93a7" text-anchor="middle" font-size="11">target repo in → ranked findings → patch → pull request</text>
       </svg>
     </div>
-    <p style="text-align:center;color:var(--mut);font-size:13.5px;margin-top:18px;font-family:ui-monospace,monospace;">analyzer · cli · deprecations · fixer · models · proposer · scanner · schema_drift · vendor_map · verifier</p>
+    <p style="text-align:center;color:var(--mut);font-size:13.5px;margin-top:18px;font-family:ui-monospace,monospace;">agent · analyzer · api_server · cli · deprecations · fixer · mcp_server · models · proposer · scanner · schema_drift · vendor_map · verifier</p>
   </div>
 </section>
 
 <section id="roadmap">
   <div class="wrap">
     <h2>Roadmap</h2>
-    <p class="lede">v0.4.2 is the working core — verified, not just drafted: manifest-less pattern detection, Twilio-SDK/Plaid-SDK migrations, per-entry function auto-detection. Next: deeper fixes, team workflow, vendor partnerships.</p>
+    <p class="lede">v0.4.3 is the working core — verified, not just drafted: Windows-safe UTF-8 I/O, auto-detected test functions on every entry point, complete vendor map, honest Reddit framing. Next: deeper fixes, team workflow, vendor partnerships.</p>
     <div class="road">
       <div class="card">
-        <span class="ver">v0.4 — shipped ✓</span>
+        <span class="ver">v0.4.3 — shipped ✓</span>
         <ul>
           <li>MCP server, REST API, and autonomous agent loop (deterministic planner)</li>
           <li><code>pip install</code> entry point: a real <code>integration-rot</code> command</li>
           <li>Executed verification: run contract tests in an isolated sandbox</li>
           <li>8 migration fixers, 17-entry sourced deprecation DB</li>
+          <li>Manifest-less pattern detection; Twilio-SDK &amp; Plaid-SDK migrations</li>
+          <li>Auto-detected test function on fix / verify / agent / API / MCP</li>
         </ul>
       </div>
       <div class="card">
