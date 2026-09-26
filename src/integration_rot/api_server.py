@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 from . import __version__
 from .analyzer import analyze
 from .deprecations import load_db
-from .fixer import draft_fix
+from .fixer import detect_func_name, draft_fix
 from .mcp_server import FIXER_CATALOG, _finding_to_dict
 from .scanner import scan_repo
 
@@ -92,9 +92,16 @@ def api_fix(body: dict) -> tuple[int, dict]:
     if missing:
         return 400, {"error": f"missing required fields: {', '.join(missing)}"}
     try:
-        draft = draft_fix(entry_id, path, rel_file,
-                          module=body.get("module", "app"),
-                          func_name=body.get("func_name", "create_charge"))
+        # func_name: explicit value wins; otherwise detect it from the finding
+        # (first code-pattern match -> enclosing def) instead of defaulting
+        # every entry to a Stripe-specific name. When detection fails, omit
+        # it and let each fixer's own default apply.
+        kwargs: dict = {"module": body.get("module", "app")}
+        func_name = body.get("func_name") or detect_func_name(
+            path, rel_file, entry_id)
+        if func_name:
+            kwargs["func_name"] = func_name
+        draft = draft_fix(entry_id, path, rel_file, **kwargs)
     except KeyError as e:
         return 422, {"error": str(e)}
     return 200, {

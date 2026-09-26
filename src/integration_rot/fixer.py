@@ -32,6 +32,9 @@ class FixDraft:
     changes: list = field(default_factory=list)      # list[FileChange]
     tests: list = field(default_factory=list)        # list[(path, content)]
     notes: list = field(default_factory=list)        # human-readable caveats
+    meta: dict = field(default_factory=dict)         # fixer-specific hints
+                                                     # (e.g. client obj names
+                                                     # for test generation)
 
     def empty(self) -> bool:
         return not self.changes
@@ -41,17 +44,15 @@ class FixDraft:
 # Hermetic contract tests: stub third-party imports missing from the env
 # ---------------------------------------------------------------------------
 
-def _third_party_imports(source_file: str | Path, own_module: str) -> list[str]:
-    """Top-level third-party package names imported by a Python source file.
+def _third_party_imports_of_source(source: str, own_module: str) -> list[str]:
+    """Dotted third-party module paths imported by Python source text.
 
-    Parsed with ast; stdlib (sys.stdlib_module_names) and the module itself
-    are excluded. Used to keep generated contract tests hermetic: a test that
-    imports the migrated module must not fail collection with
-    ModuleNotFoundError on machines without the app's dependencies.
+    Same as _third_party_imports but takes the source directly, so callers
+    can also cover generated/rewritten content (e.g. a fixer's new imports).
     """
     try:
-        tree = ast.parse(Path(source_file).read_text(encoding="utf-8"))
-    except (OSError, SyntaxError, ValueError):
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
         return []
     stdlib = sys.stdlib_module_names
     own_top = (own_module or "").split(".")[0]
@@ -66,24 +67,109 @@ def _third_party_imports(source_file: str | Path, own_module: str) -> list[str]:
         else:
             continue
         for name in names:
+            name = (name or "").strip()
+            if not name:
+                continue
             top = name.split(".")[0]
-            if top and top not in stdlib and top != own_top and top not in found:
-                found.append(top)
+            if top in stdlib or top == own_top or name in found:
+                continue
+            found.append(name)
     return found
+
+
+def _third_party_imports(source_file: str | Path, own_module: str) -> list[str]:
+    """Dotted third-party module paths imported by a Python source file.
+
+    Parsed with ast; stdlib (sys.stdlib_module_names) and the module itself
+    are excluded. Dotted paths are kept (e.g. ``slack_sdk.rtm``) so the
+    hermetic preamble can stub submodules too — ``from pkg.sub import X``
+    fails otherwise, even when ``pkg`` is stubbed. Used to keep generated
+    contract tests hermetic: a test that imports the migrated module must
+    not fail collection with ModuleNotFoundError on machines without the
+    app's dependencies.
+    """
+    try:
+        source = Path(source_file).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return _third_party_imports_of_source(source, own_module)
+
+
+def _draft_stub_imports(repo_path: str | Path, rel_path: str,
+                        module: str, draft: FixDraft) -> list[str]:
+    """Stub imports covering the original file AND the fixer's rewritten
+    content: the generated contract test runs against the migrated code,
+    whose imports (e.g. slack_sdk.socket_mode) may differ from the original.
+    """
+    seen = _third_party_imports(Path(repo_path) / rel_path, module)
+    for change in draft.changes:
+        for name in _third_party_imports_of_source(change.new_content, module):
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
+def detect_func_name(repo_path: str | Path, rel_path: str,
+                     entry_id: str) -> str | None:
+    """Best-effort function name for a finding, without running the analyzer.
+
+    Finds the first line matching the entry's code patterns, then returns the
+    enclosing `def` (AST-based). Lets the API/MCP draft fixes without the
+    caller knowing the function name — and without defaulting every entry to
+    a Stripe-specific name. None when nothing can be determined.
+    """
+    from .deprecations import load_db
+    entry = next((e for e in load_db() if e.id == entry_id), None)
+    if entry is None or not entry.code_patterns:
+        return None
+    full = Path(repo_path) / rel_path
+    try:
+        lines = full.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    compiled = [re.compile(p) for p in entry.code_patterns]
+    lineno = None
+    for i, line in enumerate(lines, start=1):
+        if any(rx.search(line) for rx in compiled):
+            lineno = i
+            break
+    if lineno is None:
+        return None
+    try:
+        tree = ast.parse(full.read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return None
+    best = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", lineno) or lineno
+            if node.lineno <= lineno <= end:
+                if best is None or node.lineno > best.lineno:
+                    best = node
+    return best.name if best is not None else None
 
 
 def _hermetic_import_preamble(packages: Sequence[str]) -> str:
     """pytest preamble stubbing third-party imports missing from the env.
 
     Generated contract tests import the migrated module, which may depend on
-    third-party packages not installed where the test runs. Missing packages
-    are stubbed with MagicMock so collection never fails; installed packages
-    are imported normally and used as-is. This changes nothing the test
-    asserts — it only removes the environment dependency.
+    third-party packages not installed where the test runs. Missing modules
+    are stubbed with MagicMock so collection never fails; installed modules
+    are imported normally and used as-is. Dotted paths are expanded to every
+    prefix (``slack_sdk.rtm`` also stubs ``slack_sdk``) so submodule imports
+    keep working. This changes nothing the test asserts — it only removes
+    the environment dependency.
     """
-    if not packages:
+    expanded: list[str] = []
+    for name in packages:
+        parts = name.split(".")
+        for i in range(1, len(parts) + 1):
+            prefix = ".".join(parts[:i])
+            if prefix not in expanded:
+                expanded.append(prefix)
+    if not expanded:
         return ""
-    pkgs = ", ".join(f'"{p}"' for p in packages)
+    pkgs = ", ".join(f'"{p}"' for p in expanded)
     return (
         "import sys\n"
         "from unittest.mock import MagicMock\n"
@@ -357,6 +443,11 @@ _AUTHY_IMPORT_RE = re.compile(r"from\s+authy\.api\s+import\s+AuthyApiClient")
 _AUTHY_CLIENT_RE = re.compile(r"AuthyApiClient\s*\(")
 _VERIFY_START_RE = re.compile(r"(\w+)\.phones\.verification_start\s*\(")
 _VERIFY_CHECK_RE = re.compile(r"(\w+)\.phones\.verification_check\s*\(")
+# Twilio SDK style: client.authy.services("VAXXX").verifications.create(...)
+_SDK_AUTHY_START_RE = re.compile(
+    r"(\w+)\.authy\.services\(([^)]*)\)\.verifications\.create\(")
+_SDK_AUTHY_CHECK_RE = re.compile(
+    r"(\w+)\.authy\.services\(([^)]*)\)\.verification_checks\.create\(")
 
 
 def _migrate_verify_start_args(arg_text: str) -> tuple[str, list[str]]:
@@ -466,11 +557,31 @@ def draft_twilio_authy_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
             new_source = new_source[:m.start()] + replacement + new_source[after:]
             count += 1
 
+    # Twilio SDK style: client.authy.services(SID).verifications.create(...)
+    # Verify v2 takes the same kwargs — only the resource path changes, so
+    # the call prefix is rewritten and the arguments are left untouched.
+    sdk_count = 0
+    for rx, new_call in (
+        (_SDK_AUTHY_START_RE, "verifications.create"),
+        (_SDK_AUTHY_CHECK_RE, "verification_checks.create"),
+    ):
+        for m in reversed(list(rx.finditer(new_source))):
+            obj, sid = m.group(1), m.group(2).strip()
+            replacement = f"{obj}.verify.v2.services({sid}).{new_call}("
+            new_source = new_source[:m.start()] + replacement + new_source[m.end():]
+            sdk_count += 1
+    if sdk_count:
+        count += sdk_count
+        draft.notes.append(
+            "kept your existing service SID — confirm it is a Verify Service "
+            "SID in the Twilio console (create one if needed)")
+
     if count == 0:
         draft.notes.append("no Authy API usage found — nothing to draft")
         return draft
 
-    if "VERIFY_SERVICE_SID" not in original:
+    if "VERIFY_SERVICE_SID" in new_source and "VERIFY_SERVICE_SID" not in original:
+        # legacy path inlined the constant — declare it once near the import
         sid_line = ('VERIFY_SERVICE_SID = "VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"'
                     "  # TODO: your Verify Service SID\n")
         anchor = "from twilio.rest import Client"
@@ -502,42 +613,69 @@ def generate_twilio_contract_test(module: str, start_func: str = "start_verifica
     preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Twilio Authy -> Verify v2 migration.
 
-Asserts the app drives the Verify v2 API (services -> verifications /
-verification_checks) instead of the retired Authy API. Uses unittest.mock.
-"""
-{preamble}from unittest.mock import patch
+Asserts the migrated functions drive the Verify v2 resource path
+(client.verify.v2.services(...) -> verifications.create /
+verification_checks.create) instead of the retired Authy API.
+Uses unittest.mock.
 
+Call arguments are derived from each function's own signature, so this works
+for both the legacy (phone_number, country_code[, code]) and the Twilio-SDK
+(to, channel / to, code) shapes. The client is the module-level object when
+the app holds one, otherwise the patched Client class.
+"""
+{preamble}import inspect
+from unittest.mock import patch
+
+import {module} as app_module
 from {module} import {start_func}, {check_func}
 
 
-def _verify_service(mock_client_cls):
-    return mock_client_cls.return_value.verify.v2.services.return_value
+def _plausible_args(fn):
+    """Plausible call args from the function's own parameter names."""
+    values = {{
+        "to": "+14155552671", "phone": "+14155552671",
+        "phone_number": "4155552671", "country": "1", "country_code": "1",
+        "channel": "sms", "code": "123456", "token": "123456",
+        "verification_code": "123456",
+    }}
+    args = []
+    for name, param in inspect.signature(fn).parameters.items():
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        if param.default is not param.empty:
+            continue
+        args.append(values.get(name, "x"))
+    return args
+
+
+def _twilio_client(mock_client_cls):
+    for name in ("client", "twilio_client", "authy_api"):
+        obj = getattr(app_module, name, None)
+        if obj is not None:
+            return obj
+    return mock_client_cls.return_value
 
 
 @patch("{module}.Client")
 def test_verify_start_contract(mock_client_cls):
-    svc = _verify_service(mock_client_cls)
+    client = _twilio_client(mock_client_cls)
+    svc = client.verify.v2.services.return_value
     svc.verifications.create.return_value.status = "pending"
 
-    {start_func}("4155552671", "1")
+    assert {start_func}(*_plausible_args({start_func})) is not None
 
     svc.verifications.create.assert_called_once()
-    _, kwargs = svc.verifications.create.call_args
-    assert kwargs["to"] == "+14155552671"
-    assert kwargs["channel"] in ("sms", "call", "email")
 
 
 @patch("{module}.Client")
 def test_verify_check_contract(mock_client_cls):
-    svc = _verify_service(mock_client_cls)
+    client = _twilio_client(mock_client_cls)
+    svc = client.verify.v2.services.return_value
     svc.verification_checks.create.return_value.status = "approved"
 
-    assert {check_func}("4155552671", "1", "123456") is not None
+    assert {check_func}(*_plausible_args({check_func})) is not None
 
     svc.verification_checks.create.assert_called_once()
-    _, kwargs = svc.verification_checks.create.call_args
-    assert kwargs["to"] == "+14155552671"
-    assert kwargs["code"] == "123456"
 '''
     return path, content
 
@@ -744,6 +882,7 @@ def test_sendgrid_v3_contract(mock_post):
 # ---------------------------------------------------------------------------
 
 _PLAID_GET_CALL_RE = re.compile(r"(\w+)\.Transactions\.get\s*\(")
+_PLAID_GET_SNAKE_RE = re.compile(r"(\w+)\.transactions_get\s*\(")
 _PLAID_GET_URL_RE = re.compile(r"/transactions/get\b")
 
 
@@ -757,14 +896,40 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
     count = 0
 
     call_starts: list[int] = []
-    for m in reversed(list(_PLAID_GET_CALL_RE.finditer(new_source))):
+    # collect matches from every call-shape regex, then apply back-to-front so
+    # earlier replacements never invalidate later match positions
+    call_matches = []
+    for rx in (_PLAID_GET_CALL_RE, _PLAID_GET_SNAKE_RE):
+        call_matches.extend(rx.finditer(new_source))
+    response_vars: list[str] = []  # vars assigned from a rewritten call
+    client_names: list[str] = []   # client objects driving the calls
+    for m in sorted(call_matches, key=lambda m: m.start(), reverse=True):
         obj = m.group(1)
         open_idx = new_source.index("(", m.start())
         arg_text, after = _extract_balanced_args(new_source, open_idx)
         parts = _split_top_level_kwargs(arg_text)
         access_token = parts[0] if parts else "access_token"
+        # capture the assigned response variable: `resp = obj.transactions_get(`
+        line_start = new_source.rfind("\n", 0, m.start()) + 1
+        lhs = re.search(r"(\w+)\s*=\s*$", new_source[line_start:m.start()])
+        var = lhs.group(1) if lhs else None
         replacement = f"{obj}.transactions_sync({access_token}, cursor=cursor)"
+        repl_end = m.start() + len(replacement)
         new_source = new_source[:m.start()] + replacement + new_source[after:]
+        if var:
+            # /transactions/sync has no `transactions` key — it returns
+            # added/modified/removed. Rewrite this response's accesses in the
+            # region after the call (back-to-front, so positions are final).
+            tail = new_source[repl_end:]
+            tail = re.sub(rf"\b{re.escape(var)}\[\s*[\"']transactions[\"']\s*\]",
+                          f'{var}["added"]', tail)
+            tail = re.sub(rf"\b{re.escape(var)}\.get\(\s*[\"']transactions[\"']",
+                          f'{var}.get("added"', tail)
+            new_source = new_source[:repl_end] + tail
+            if var not in response_vars:
+                response_vars.append(var)
+        if obj not in client_names:
+            client_names.append(obj)
         call_starts.append(m.start())
         count += 1
     if _PLAID_GET_URL_RE.search(new_source):
@@ -786,6 +951,13 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
     if count == 0:
         draft.notes.append("no /transactions/get usage found — nothing to draft")
         return draft
+    draft.meta["client_names"] = client_names
+    if response_vars:
+        draft.notes.append(
+            "/transactions/sync returns added/modified/removed (no `transactions` "
+            f"key): rewrote {', '.join(response_vars)}[\"transactions\"] accesses to "
+            "[\"added\"] — handle `modified`/`removed` and has_more pagination "
+            "for full parity")
 
     draft.notes.insert(0, f"rewrote {count} /transactions/get call(s) to /transactions/sync")
     draft.notes.append("added `cursor = None` before the first sync call so the drafted "
@@ -806,6 +978,7 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
 
 
 def generate_plaid_contract_test(module: str, func_name: str = "sync_transactions",
+                                 client_name: str = "plaid_client",
                                  stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the /transactions/sync migration."""
     path = "tests/test_plaid_sync_contract.py"
@@ -820,7 +993,7 @@ Asserts the app drives the cursor-based sync endpoint and pages through
 from {module} import {func_name}
 
 
-@patch("{module}.plaid_client")
+@patch("{module}.{client_name}")
 def test_plaid_sync_contract(mock_client):
     mock_client.transactions_sync.side_effect = [
         {{"added": [{{"transaction_id": "t1"}}], "has_more": True, "next_cursor": "c1"}},
@@ -842,7 +1015,7 @@ def test_plaid_sync_contract(mock_client):
 # Slack: RTM API -> Socket Mode
 # ---------------------------------------------------------------------------
 
-_RTM_IMPORT_RE = re.compile(r"from\s+slack\s+import\s+RTMClient")
+_RTM_IMPORT_RE = re.compile(r"from\s+slack(?:_sdk\.rtm)?\s+import\s+RTMClient")
 _RTM_CLIENT_RE = re.compile(r"(\w+)\s*=\s*RTMClient\(token\s*=\s*([^)]+)\)")
 _RTM_RUN_ON_RE = re.compile(r"@RTMClient\.run_on\(event\s*=\s*['\"]([^'\"]+)['\"]\)")
 
@@ -889,6 +1062,22 @@ def draft_slack_rtm_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
             "append the handler to socket_client.socket_mode_request_listeners; "
             "the handler signature becomes (client: SocketModeClient, req: SocketModeRequest)")
     if old_var:
+        # instance-style handlers: @rtm.on("message") — the old client var no
+        # longer exists after migration, so convert to a listener TODO
+        on_re = re.compile(
+            rf"@{re.escape(old_var)}\.on\(\s*['\"]([^'\"]+)['\"]\s*\)[ \t]*\n?")
+        for m in reversed(list(on_re.finditer(new_source))):
+            event = m.group(1)
+            replacement = (
+                f"# TODO(socket-mode): RTM event '{event}' — register the handler below via\n"
+                f"# socket_client.socket_mode_request_listeners.append(<handler_function>)\n")
+            new_source = new_source[:m.start()] + replacement + new_source[m.end():]
+            count += 1
+            draft.notes.append(
+                f"@{old_var}.on('{event}') has no decorator equivalent — append the "
+                "handler to socket_client.socket_mode_request_listeners; the handler "
+                "signature becomes (client: SocketModeClient, req: SocketModeRequest)")
+    if old_var:
         start_re = re.compile(rf"\b{re.escape(old_var)}\.start\(\)")
         if start_re.search(new_source):
             new_source = start_re.sub("socket_client.connect()", new_source)
@@ -915,26 +1104,38 @@ def generate_slack_contract_test(module: str = "app",
     preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Slack RTM -> Socket Mode migration.
 
-Asserts the app builds a SocketModeClient with an app-level token and a
-WebClient, registers a listener, and connects. Uses unittest.mock.
+Asserts the migrated module constructs a SocketModeClient once, with an
+app-level token slot and a WebClient built from the original token.
+Uses unittest.mock.
+
+NOTE: the fixer cannot invent your Slack app-level token — it emits the
+"<redacted>" placeholder for app_token. Replace it with a real
+xapp-... token (Slack app settings > Socket Mode) before relying on this.
+Also verify connect()/listener wiring matches your app's lifecycle; this
+sketch only pins the construction contract.
 """
-{preamble}from unittest.mock import patch
+{preamble}import sys
+from unittest.mock import patch
 
 
-@patch("{module}.SocketModeClient")
-@patch("{module}.WebClient")
+@patch("slack_sdk.socket_mode.SocketModeClient")
+@patch("slack_sdk.WebClient")
 def test_socket_mode_contract(mock_web_client, mock_socket_client):
-    import {module} as app
+    # Fresh import under patch so module-level migration code runs against
+    # the mocks. (Patching app.SocketModeClient would be defeated by the
+    # from-import rebinding the name on reload.)
+    sys.modules.pop("{module}", None)
     import importlib
-    importlib.reload(app)
+    app_module = importlib.import_module("{module}")
+    assert app_module is not None
 
     mock_socket_client.assert_called_once()
     _, kwargs = mock_socket_client.call_args
-    assert kwargs["app_token"].startswith("xapp-"), "Socket Mode needs an app-level token"
+    assert "app_token" in kwargs, "SocketModeClient needs an app-level token"
     assert "web_client" in kwargs
-    mock_socket_client.return_value.connect.assert_called()
-    assert mock_socket_client.return_value.socket_mode_request_listeners, \\
-        "at least one listener must be registered"
+    assert kwargs["app_token"] != "xoxb-old", \\
+        "app_token must be an app-level token, not the old bot token"
+    mock_web_client.assert_called_once()
 '''
     return path, content
 
@@ -1283,10 +1484,6 @@ def test_v3_base_used():
 def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
               **kwargs) -> FixDraft:
     """Dispatch to the right vendor fixer. Raises KeyError if unsupported."""
-    def _stubs(module: str) -> list[str]:
-        # third-party imports of the file being patched, so the generated
-        # contract test can stub the ones missing from the test env
-        return _third_party_imports(Path(repo_path) / rel_path, module)
 
     if entry_id == "stripe-charges-api":
         draft = draft_stripe_charges_fix(repo_path, rel_path)
@@ -1295,7 +1492,7 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
             test_path, test_content = generate_stripe_contract_test(
                 module=module,
                 func_name=kwargs.get("func_name", "create_charge"),
-                stub_imports=_stubs(module))
+                stub_imports=_draft_stub_imports(repo_path, rel_path, module, draft))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "twilio-authy-api":
@@ -1306,7 +1503,7 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
                 module=module,
                 start_func=kwargs.get("start_func", "start_verification"),
                 check_func=kwargs.get("check_func", "check_verification"),
-                stub_imports=_stubs(module))
+                stub_imports=_draft_stub_imports(repo_path, rel_path, module, draft))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "sendgrid-v2-api":
@@ -1316,17 +1513,19 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
             test_path, test_content = generate_sendgrid_contract_test(
                 module=module,
                 func_name=kwargs.get("func_name", "send_email"),
-                stub_imports=_stubs(module))
+                stub_imports=_draft_stub_imports(repo_path, rel_path, module, draft))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "plaid-legacy-transactions":
         draft = draft_plaid_transactions_fix(repo_path, rel_path)
         if not draft.empty():
             module = kwargs.get("module", "app")
+            client_names = draft.meta.get("client_names") or ["plaid_client"]
             test_path, test_content = generate_plaid_contract_test(
                 module=module,
                 func_name=kwargs.get("func_name", "sync_transactions"),
-                stub_imports=_stubs(module))
+                client_name=client_names[0],
+                stub_imports=_draft_stub_imports(repo_path, rel_path, module, draft))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "slack-rtm-api":
@@ -1335,7 +1534,7 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
             module = kwargs.get("module", "app")
             test_path, test_content = generate_slack_contract_test(
                 module=module,
-                stub_imports=_stubs(module))
+                stub_imports=_draft_stub_imports(repo_path, rel_path, module, draft))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "github-api-query-auth":

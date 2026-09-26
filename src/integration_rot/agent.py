@@ -268,7 +268,7 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
             findings = analyze(scan, active, today=today).findings
             if not findings:
                 if verbose:
-                    print(f"[iter {n}] no actionable findings remain — stopping.")
+                    print("no actionable findings remain — stopping.")
                 break
             # Dependency-level findings (no code location) can't be patched by
             # a file fixer: report once, then leave them out of the loop.
@@ -282,8 +282,7 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
                     reported.add(f.entry.id)
             if not actionable:
                 if verbose:
-                    print(f"[iter {n}] remaining findings have no patchable "
-                          f"code — stopping.")
+                    print("remaining findings have no patchable code — stopping.")
                 break
             ordered, planner = _planner_order(actionable, workdir,
                                               planner_endpoint, planner_notes)
@@ -312,6 +311,8 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
                 settled.add(target.entry.id)
                 report.log.append(IterationLog(n, target.entry.id, rel,
                                                "skipped", reason))
+                if verbose:
+                    print(f"[iter {n}] SKIPPED {target.entry.id}: {reason}")
                 continue
 
             if draft.empty():
@@ -319,6 +320,8 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
                 report.log.append(IterationLog(n, target.entry.id, rel,
                                                "skipped", reason))
                 settled.add(target.entry.id)
+                if verbose:
+                    print(f"[iter {n}] SKIPPED {target.entry.id}: {reason}")
                 continue
 
             # apply to the working copy, then prove it in a sandbox
@@ -404,8 +407,14 @@ def print_report(report: AgentReport) -> None:
         print("\n--- diffs vs your repo (NOT applied; review and apply manually) ---")
         for d in report.diffs:
             print(d)
-    print("\nYour repo was not modified. Apply the diffs above yourself, or run")
-    print("`integration-rot fix --apply` per finding for the same drafts.")
+    if report.fixed:
+        print(f"\nKept {len(report.fixed)} fix(es), proven by contract tests, in a "
+              f"working copy — diffs above.")
+    elif not report.reverted and not report.unfixable:
+        print("\nNo fixes kept.")
+    print("Your repo was not modified. To apply a draft, run")
+    print("`integration-rot fix --entry <id> --file <file> --apply <repo>` "
+          "per finding.")
 
 
 def cmd_agent(args) -> int:

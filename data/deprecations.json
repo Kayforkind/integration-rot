@@ -52,7 +52,8 @@
       "announced": "",
       "code_patterns": [
         "authy_api",
-        "Authy\\("
+        "Authy\\(",
+        "\\.authy\\."
       ],
       "fix_available": true,
       "id": "twilio-authy-api",
@@ -159,7 +160,9 @@
     {
       "announced": "",
       "code_patterns": [
-        "/transactions/get"
+        "/transactions/get",
+        "transactions_get",
+        "Transactions\\.get"
       ],
       "fix_available": true,
       "id": "plaid-legacy-transactions",

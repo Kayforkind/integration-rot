@@ -245,7 +245,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.4.1
+integration-rot --version   # integration-rot 0.4.2
 ```
 
 ---
@@ -967,12 +967,32 @@ integration-rot/
   valid and satisfies its own sketch," not "the migration is correct in
   production." Review every diff.
 
+**v0.4.2 — detection + fixer depth + console honesty (125 tests):**
+- Manifest-less repos: code-pattern entries (e.g. `RTMClient`, `transactions_get`)
+  are now flagged even when no dependency manifest names their package — and
+  CLI `check` falls back to the full DB when no vendors can be inferred.
+- New detections: Twilio SDK-style `client.authy.services(...)` calls and the
+  plaid-python SDK's `transactions_get(...)` / `Transactions.get(...)`.
+- New migrations: Authy → Verify v2 (SDK style), `/transactions/get` →
+  `/transactions/sync` incl. the `response["transactions"]` → `response["added"]`
+  shape change; Slack RTM fixer now handles `from slack_sdk.rtm import RTMClient`
+  and converts dangling `@rtm.on(...)` decorators into Socket Mode listener TODOs.
+- `/fix` and MCP `draft_fix` auto-detect the function under test from the finding
+  (AST-based) instead of defaulting every entry to `create_charge`.
+- Agent console: honest stop messages, per-iteration SKIPPED lines, kept-fix
+  summary, and `check` now marks findings with `[auto-fix available]`.
+- Limitations added to this pass: Slack event-listener wiring and Plaid's
+  `modified`/`removed`/`has_more` handling stay manual TODOs in the drafts;
+  the agent still fixes one file per finding per iteration.
+
 ---
 
 ## Roadmap
 
-**v0.4 — shipped:** MCP server, REST API, autonomous agent loop (deterministic
-planner), `pip install` entry point, SendGrid fixer/test correctness fixes.
+**v0.4 — shipped (v0.4.2):** MCP server, REST API, autonomous agent loop
+(deterministic planner), `pip install` entry point, SendGrid fixer/test
+correctness fixes, manifest-less pattern detection, Twilio-SDK/Plaid-SDK
+detection + migrations, per-entry function auto-detection, console honesty.
 
 **v0.5 — live intelligence**
 - Wire `RSSChangelogFetcher` / `GitHubReleasesFetcher` for Twilio, Slack, Stripe

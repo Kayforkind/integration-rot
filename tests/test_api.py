@@ -109,3 +109,24 @@ def test_unknown_route(base_url):
 def test_method_not_allowed(base_url):
     status, _ = _request("DELETE", base_url + "/health")
     assert status == 405
+
+
+def test_fix_autodetects_func_name_per_entry():
+    """POST /fix without func_name must not default every entry to
+    create_charge: the function is detected from the finding."""
+    from integration_rot.api_server import api_fix
+    status, payload = api_fix({"entry_id": "sendgrid-v2-api",
+                               "path": "demo/sample-app", "file": "app.py"})
+    assert status == 200
+    content = payload["tests"][0]["content"]
+    assert "from app import send_receipt" in content
+    assert "from app import create_charge" not in content
+
+
+def test_fix_explicit_func_name_wins():
+    from integration_rot.api_server import api_fix
+    status, payload = api_fix({"entry_id": "sendgrid-v2-api",
+                               "path": "demo/sample-app", "file": "app.py",
+                               "func_name": "custom_fn"})
+    assert status == 200
+    assert "from app import custom_fn" in payload["tests"][0]["content"]

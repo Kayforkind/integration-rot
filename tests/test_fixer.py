@@ -456,3 +456,99 @@ def test_contract_test_is_hermetic_without_third_party_deps(tmp_path):
         cwd=repo, capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-500:]
+
+
+def test_twilio_sdk_style_rewrite(tmp_path):
+    """Twilio SDK style (client.authy.services(...)) migrates to Verify v2,
+    keeping the inline service SID (no spurious VERIFY_SERVICE_SID)."""
+    (tmp_path / "a.py").write_text(
+        'from twilio.rest import Client\nclient = Client("ACx", "tok")\n'
+        'def start_verification(to, channel):\n'
+        '    return client.authy.services("VAX").verifications.create(to=to, channel=channel)\n'
+        'def check_verification(to, code):\n'
+        '    return client.authy.services("VAX").verification_checks.create(to=to, code=code)\n')
+    from integration_rot.fixer import draft_twilio_authy_fix
+    draft = draft_twilio_authy_fix(tmp_path, "a.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert 'client.verify.v2.services("VAX").verifications.create(to=to, channel=channel)' in new
+    assert 'client.verify.v2.services("VAX").verification_checks.create(to=to, code=code)' in new
+    assert ".authy.services(" not in new
+    assert "VERIFY_SERVICE_SID" not in new
+
+
+def test_plaid_snake_case_rewrite(tmp_path):
+    """plaid-python's transactions_get(...) migrates, including the response
+    shape: resp["transactions"] -> resp["added"]."""
+    (tmp_path / "a.py").write_text(
+        'plaid_client = None\ndef sync_transactions(access_token):\n'
+        '    resp = plaid_client.transactions_get({"access_token": access_token})\n'
+        '    return resp["transactions"]\n')
+    from integration_rot.fixer import draft_plaid_transactions_fix
+    draft = draft_plaid_transactions_fix(tmp_path, "a.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert "plaid_client.transactions_sync(" in new
+    assert 'resp["added"]' in new
+    assert 'resp["transactions"]' not in new
+    assert "cursor = None" in new
+
+
+def test_slack_sdk_import_and_on_decorator(tmp_path):
+    """slack_sdk.rtm imports are rewritten (not just legacy `slack`), and
+    @rtm.on(...) decorators don't dangle after the client var is renamed."""
+    (tmp_path / "a.py").write_text(
+        'from slack_sdk.rtm import RTMClient\nrtm = RTMClient(token="x")\n'
+        '@rtm.on("message")\ndef handle(**payload):\n    pass\nrtm.start()\n')
+    from integration_rot.fixer import draft_slack_rtm_fix
+    draft = draft_slack_rtm_fix(tmp_path, "a.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert "from slack_sdk.socket_mode import SocketModeClient" in new
+    assert "from slack_sdk.rtm import RTMClient" not in new
+    assert "@rtm.on" not in new
+    assert "socket_mode_request_listeners" in new
+
+
+def _run_generated_test(tmp_path, entry_id, filename, source, **kwargs):
+    """Draft, apply, and execute the generated contract test in a bare env."""
+    import subprocess
+    import sys as _sys
+    from integration_rot.fixer import draft_fix, write_fix
+    repo = tmp_path / "r"
+    repo.mkdir(exist_ok=True)
+    (repo / "app.py").write_text(source)
+    draft = draft_fix(entry_id, repo, "app.py", module="app", **kwargs)
+    assert not draft.empty(), f"no draft for {entry_id}"
+    write_fix(repo, draft)
+    proc = subprocess.run(
+        [_sys.executable, "-m", "pytest", f"tests/{filename}",
+         "-q", "--no-header", "-p", "no:cacheprovider"],
+        cwd=repo, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout[-2000:]
+
+
+def test_e2e_twilio_sdk_style_contract(tmp_path):
+    _run_generated_test(
+        tmp_path, "twilio-authy-api", "test_twilio_verify_contract.py",
+        'from twilio.rest import Client\nclient = Client("ACx", "tok")\n'
+        'def start_verification(to, channel):\n'
+        '    return client.authy.services("VAX").verifications.create(to=to, channel=channel)\n'
+        'def check_verification(to, code):\n'
+        '    return client.authy.services("VAX").verification_checks.create(to=to, code=code)\n')
+
+
+def test_e2e_plaid_snake_case_contract(tmp_path):
+    _run_generated_test(
+        tmp_path, "plaid-legacy-transactions", "test_plaid_sync_contract.py",
+        'plaid_client = None\ndef sync_transactions(access_token):\n'
+        '    resp = plaid_client.transactions_get({"access_token": access_token})\n'
+        '    return resp["transactions"]\n',
+        func_name="sync_transactions")
+
+
+def test_e2e_slack_sdk_contract(tmp_path):
+    _run_generated_test(
+        tmp_path, "slack-rtm-api", "test_slack_socket_mode_contract.py",
+        'from slack_sdk.rtm import RTMClient\nrtm = RTMClient(token="xoxb-old")\n'
+        '@rtm.on("message")\ndef handle(**payload):\n    pass\nrtm.start()\n')

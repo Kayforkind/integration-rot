@@ -87,3 +87,40 @@ def test_renderers():
     data = json.loads(to_json(report))
     assert data["counts"]["critical"] == 1
     assert data["findings"][0]["id"] == "b"
+
+
+def test_pattern_match_without_manifest(tmp_path):
+    # Entries naming packages must still flag code-pattern hits in repos with
+    # no dependency manifests (no scanned deps at all) — previously the
+    # analyzer skipped these entries before ever checking patterns.
+    (tmp_path / "a.py").write_text("rtm = RTMClient(token=\"x\")\n")
+    entry = _entry(id="slack-rtm",
+                   packages=[{"ecosystem": "pypi", "name": "slack-sdk"}],
+                   code_patterns=[r"RTMClient"])
+    report = analyze(_scan([], ["a.py"], str(tmp_path)), [entry], today=TODAY)
+    assert len(report.findings) == 1
+    assert report.findings[0].dependency is None
+    assert any("a.py:1" in ev for ev in report.findings[0].evidence)
+
+
+def test_package_only_entry_without_dep_match_stays_silent(tmp_path):
+    # Package-only entries (no code patterns) with no dep match must not
+    # start flagging once the manifest-less fall-through exists.
+    (tmp_path / "a.py").write_text("x = 1\n")
+    entry = _entry(id="pkg-only",
+                   packages=[{"ecosystem": "pypi", "name": "stripe"}])
+    report = analyze(_scan([], ["a.py"], str(tmp_path)), [entry], today=TODAY)
+    assert report.findings == []
+
+
+def test_console_marks_auto_fix(tmp_path, capsys):
+    from integration_rot.analyzer import print_console
+    (tmp_path / "a.py").write_text("stripe.Charge.create(amount=1)\n")
+    dep = Dependency(name="stripe", version="8.0.0", ecosystem="npm",
+                     manifest="package.json", vendor="Stripe")
+    entry = _entry(id="s", code_patterns=[r"stripe\.Charge\.create"],
+                   fix_available=True)
+    report = analyze(_scan([dep], ["a.py"], str(tmp_path)), [entry], today=TODAY)
+    assert len(report.findings) == 1
+    print_console(report)
+    assert "[auto-fix available]" in capsys.readouterr().out

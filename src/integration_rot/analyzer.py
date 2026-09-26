@@ -97,8 +97,14 @@ def analyze(scan: ScanResult, entries: list[DeprecationEntry],
                         any(_package_matches(dep, c) for c in entry.packages):
                     matched_dep = dep
                     break
-            if matched_dep is None:
+            if matched_dep is None and not entry.code_patterns:
+                # package-only entry with no dependency match and no code
+                # patterns to fall back on: nothing to check.
                 continue
+            # Otherwise (no dep match, but the entry has code patterns):
+            # fall through to pattern matching below. A pattern hit still
+            # flags the finding (repos without manifests are common); the
+            # "no pattern hits and no dep" skip further down decides.
         else:
             # vendor-wide entry: only relevant if the vendor is used at all
             vendor_used = any((d.vendor or "").lower() == entry.vendor.lower()
@@ -191,7 +197,8 @@ def print_console(report: Report) -> None:
     for f in report.findings:
         e = f.entry
         when = f"sunset {e.sunset}" if e.sunset else "no sunset date"
-        print(f"  [{f.risk.upper():8}] {e.vendor}: {e.title} ({when})")
+        auto = " [auto-fix available]" if e.fix_available else ""
+        print(f"  [{f.risk.upper():8}] {e.vendor}: {e.title} ({when}){auto}")
         for ev in f.evidence:
             print(f"             - {ev}")
     print()

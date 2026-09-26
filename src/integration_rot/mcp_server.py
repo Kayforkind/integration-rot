@@ -19,7 +19,7 @@ from pathlib import Path
 from . import __version__
 from .analyzer import analyze
 from .deprecations import load_db
-from .fixer import draft_fix
+from .fixer import detect_func_name, draft_fix
 from .scanner import scan_repo
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -116,9 +116,15 @@ def tool_draft_fix(args: dict) -> dict:
     if missing:
         raise ValueError(f"missing required arguments: {', '.join(missing)}")
     try:
-        draft = draft_fix(entry_id, path, rel_file,
-                          module=args.get("module", "app"),
-                          func_name=args.get("func_name", "create_charge"))
+        # func_name: explicit value wins; otherwise detect it from the finding
+        # (first code-pattern match -> enclosing def). When detection fails,
+        # omit it and let each fixer's own default apply.
+        kwargs: dict = {"module": args.get("module", "app")}
+        func_name = args.get("func_name") or detect_func_name(
+            path, rel_file, entry_id)
+        if func_name:
+            kwargs["func_name"] = func_name
+        draft = draft_fix(entry_id, path, rel_file, **kwargs)
     except KeyError as e:
         return {"isError": True, "error": str(e)}
     return {
@@ -187,7 +193,10 @@ TOOLS = {
                        "file": {"type": "string",
                                 "description": "repo-relative source file to patch"},
                        "module": {"type": "string", "default": "app"},
-                       "func_name": {"type": "string", "default": "create_charge"}},
+                       "func_name": {"type": "string",
+                                     "description": "function under test; "
+                                                    "auto-detected from the "
+                                                    "finding when omitted"}},
                    "required": ["entry_id", "path", "file"]}),
     "lookup_deprecation": (tool_lookup_deprecation,
                            "Look up deprecation DB entries by vendor and/or "

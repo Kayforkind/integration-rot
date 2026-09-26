@@ -37,9 +37,17 @@ def cmd_scan(args) -> int:
 
 def cmd_check(args) -> int:
     scan = scan_repo(args.repo)
-    entries = load_db(args.db) if args.db else fetch_all(
-        sorted({d.vendor for d in scan.dependencies if d.vendor} |
-               {c.vendor for c in scan.direct_calls}))
+    vendors = sorted({d.vendor for d in scan.dependencies if d.vendor} |
+                     {c.vendor for c in scan.direct_calls})
+    if args.db:
+        entries = load_db(args.db)
+    elif vendors:
+        entries = fetch_all(vendors)
+    else:
+        # No manifests / direct calls to attribute a vendor: pattern-based
+        # detection is the only signal, so check the full DB instead of
+        # an empty vendor-filtered set (which would find nothing).
+        entries = load_db()
     today = date.fromisoformat(args.today) if args.today else None
     report = analyze(scan, entries, today=today)
     if args.format == "json":
