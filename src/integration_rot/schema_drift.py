@@ -7,13 +7,20 @@ endpoints, parameters, and request/response fields.
 The pinned snapshot is a curated excerpt of high-traffic endpoints; the fresh
 spec may be the vendor's full OpenAPI document — only the snapshot's endpoints
 are compared, so a full spec works as input.
+
+`save_snapshot` / `list_snapshots` / `check_drift_history` keep a timestamped
+history under data/openapi_snapshots/<vendor>/ so drift can be tracked over
+time, not just against the original pin.
 """
 from __future__ import annotations
 
 import json
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+
+from . import __version__
 
 SNAPSHOT_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "openapi_snapshots"
 
@@ -231,3 +238,69 @@ def print_diff(diff: SchemaDiff) -> None:
     if diff.empty():
         print("  No drift detected — pinned snapshot matches the fresh spec. ✓")
     print()
+
+
+# ---------------------------------------------------------------------------
+# Snapshot history: timestamped storage + diffing over time
+# ---------------------------------------------------------------------------
+
+def history_dir(vendor: str) -> Path:
+    """Directory holding timestamped snapshots for a vendor."""
+    return SNAPSHOT_DIR / vendor.lower()
+
+
+def _snapshot_doc(vendor: str, spec: dict) -> dict:
+    """Normalize a spec (full OpenAPI doc or snapshot-shaped) into the
+    snapshot document shape: {"_meta": {...}, "endpoints": [...] }."""
+    if isinstance(spec, dict) and "endpoints" in spec and "paths" not in spec:
+        endpoints = spec["endpoints"]
+    else:
+        endpoints = normalize_spec(spec)
+    return {
+        "_meta": {
+            "vendor": vendor,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "generator": f"integration-rot {__version__}",
+        },
+        "endpoints": endpoints,
+    }
+
+
+def save_snapshot(vendor: str, spec_source: str | Path) -> Path:
+    """Save a timestamped snapshot of a vendor spec. Returns the file path."""
+    spec = load_spec(spec_source)
+    doc = _snapshot_doc(vendor, spec)
+    dest = history_dir(vendor)
+    dest.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    path = dest / f"{ts}.json"
+    path.write_text(json.dumps(doc, indent=2))
+    return path
+
+
+def list_snapshots(vendor: str) -> list[Path]:
+    """Return timestamped snapshots for a vendor, oldest first."""
+    d = history_dir(vendor)
+    if not d.exists():
+        return []
+    return sorted(d.glob("*.json"))
+
+
+def check_drift_history(vendor: str, spec_source: str | Path
+                        ) -> tuple[SchemaDiff, Path, Path | None]:
+    """Save a new timestamped snapshot and diff it against the most recent
+    previous one.
+
+    Returns (diff, new_snapshot_path, previous_snapshot_path | None).
+    When no previous snapshot exists, the diff is empty and this call
+    establishes the baseline.
+    """
+    prev_list = list_snapshots(vendor)
+    prev = prev_list[-1] if prev_list else None
+    new_path = save_snapshot(vendor, spec_source)
+    new_doc = json.loads(new_path.read_text())
+    if prev is None:
+        return SchemaDiff(vendor=vendor), new_path, None
+    old_doc = json.loads(prev.read_text())
+    diff = diff_specs(old_doc["endpoints"], new_doc["endpoints"], vendor=vendor)
+    return diff, new_path, prev

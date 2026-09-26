@@ -188,3 +188,59 @@ def test_load_spec_from_file(tmp_path):
 def test_load_snapshot_missing_vendor():
     with pytest.raises(FileNotFoundError):
         load_snapshot("no-such-vendor-xyz")
+
+
+# ---------------------------------------------------------------------------
+# Snapshot history
+# ---------------------------------------------------------------------------
+
+def _write_spec(tmp_path, name, paths):
+    p = tmp_path / name
+    import json as _json
+    _json.dump({"openapi": "3.0.0", "paths": paths}, p.open("w"))
+    return str(p)
+
+
+def _op():
+    return {"responses": {"200": {"description": "ok"}}}
+
+
+def test_snapshot_history_baseline_then_diff(tmp_path, monkeypatch):
+    import integration_rot.schema_drift as sd
+    monkeypatch.setattr(sd, "SNAPSHOT_DIR", tmp_path / "snaps")
+
+    v1 = _write_spec(tmp_path, "v1.json", {"/v1/a": {"get": _op()}})
+    v2 = _write_spec(tmp_path, "v2.json",
+                     {"/v1/a": {"get": _op()}, "/v1/b": {"post": _op()}})
+
+    diff1, new1, prev1 = sd.check_drift_history("acme", v1)
+    assert prev1 is None
+    assert diff1.empty()  # first snapshot establishes the baseline
+    assert new1.exists()
+
+    diff2, new2, prev2 = sd.check_drift_history("acme", v2)
+    assert prev2 == new1
+    assert ("POST", "/v1/b") in diff2.added
+    assert not diff2.empty()
+
+    snaps = sd.list_snapshots("acme")
+    assert len(snaps) == 2
+    assert snaps[0].name < snaps[1].name  # chronological filenames
+
+
+def test_snapshot_history_no_previous(tmp_path, monkeypatch):
+    import integration_rot.schema_drift as sd
+    monkeypatch.setattr(sd, "SNAPSHOT_DIR", tmp_path / "snaps")
+    assert sd.list_snapshots("nosuchvendor") == []
+
+
+def test_save_snapshot_accepts_snapshot_shaped_doc(tmp_path, monkeypatch):
+    import json as _json
+    import integration_rot.schema_drift as sd
+    monkeypatch.setattr(sd, "SNAPSHOT_DIR", tmp_path / "snaps")
+    doc = {"_meta": {"vendor": "acme"},
+           "endpoints": [{"path": "/v1/a", "method": "GET"}]}
+    p = tmp_path / "shaped.json"
+    p.write_text(_json.dumps(doc))
+    saved = sd.save_snapshot("acme", str(p))
+    assert _json.loads(saved.read_text())["endpoints"] == doc["endpoints"]

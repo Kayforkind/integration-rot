@@ -174,7 +174,7 @@
 
 <div class="wrap">
   <header class="hero">
-    <span class="kicker">v0.2.0 &mdash; now with auto-fixers, schema drift &amp; PR proposals</span>
+    <span class="kicker">v0.3.0 &mdash; 8 auto-fixers, executed verification, drift history &amp; live feed scanning</span>
     <h1>Your APIs are rotting.<br><span class="grad">Catch it before production does.</span></h1>
     <p class="sub">
       Integration-rot scans your repos for deprecated third-party API usage,
@@ -311,12 +311,24 @@ Notes:
     </div>
 
     <div class="stage">
-      <div class="stage-head"><span class="stage-num">04</span><h3>Prove &amp; propose</h3><code>integration-rot drift</code> + <code>propose</code></div>
-      <p class="desc">Catch the changes vendors <em>don't</em> announce: diff a pinned OpenAPI
-        snapshot against the live spec. Then open the PR &mdash; risk finding, diff, contract
-        test and reviewer notes all attached.</p>
-      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">drift + propose</span></div>
-<pre><span class="c-prompt">$</span> integration-rot drift --vendor stripe --spec ./stripe-spec.json
+      <div class="stage-head"><span class="stage-num">04</span><h3>Prove &amp; propose</h3><code>integration-rot verify</code> + <code>drift</code> + <code>propose</code></div>
+      <p class="desc"><em>Execute</em> the migration, don't just draft it: run the contract tests in
+        an isolated sandbox before anything touches your repo. Catch the changes vendors
+        <em>don't</em> announce: diff a pinned OpenAPI snapshot against the live spec —
+        or track drift over time with timestamped snapshot history. Then open the PR
+        &mdash; risk finding, diff, contract test and reviewer notes all attached.</p>
+      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">verify + drift + propose</span></div>
+<pre><span class="c-prompt">$</span> integration-rot verify ./myrepo --entry stripe-charges-api --file app.py
+
+=== evidence: stripe-charges-api on app.py ===
+Files changed in sandbox: app.py, tests/test_stripe_payment_intent_contract.py
+Contract tests run: 1 (PASS)
+--- pytest output ---
+.                                                                        [100%]
+1 passed in 0.16s
+--- end pytest output ---
+
+<span class="c-prompt">$</span> integration-rot drift --vendor stripe --spec ./stripe-spec.json
 
 Schema drift for Stripe: Stripe: 1 endpoint(s) added, 0 removed, 1 changed
 
@@ -343,7 +355,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
       <div class="card"><span class="icon">🎯</span><h3>Risk-ranked findings</h3><p>Critical/high/medium/low by days-to-sunset and severity. Exit code 1 on serious findings &mdash; gate your CI.</p></div>
       <div class="card"><span class="icon">🔧</span><h3>Migration drafters</h3><p>Real unified-diff patches for 5 migrations: Stripe, Twilio Verify, SendGrid v3, Plaid sync, Slack Socket Mode.</p></div>
       <div class="card"><span class="icon">🧪</span><h3>Contract tests</h3><p>Every draft ships a pytest contract test asserting the new API's parameter contract. Proof, not vibes.</p></div>
-      <div class="card"><span class="icon">🔭</span><h3>Schema-drift detection</h3><p>Diff pinned OpenAPI snapshots against live vendor specs. Catches the changes nobody announced.</p></div>
+      <div class="card"><span class="icon">🔭</span><h3>Schema-drift detection</h3><p>Diff pinned OpenAPI snapshots against live vendor specs — or keep a timestamped drift history. Catches the changes nobody announced.</p></div>
       <div class="card"><span class="icon">📬</span><h3>PR proposer</h3><p>Opens GitHub PRs carrying the risk report, diff, contract test and reviewer notes. Draft-PR mode included.</p></div>
     </div>
   </div>
@@ -440,22 +452,23 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <section id="roadmap">
   <div class="wrap">
     <h2>Roadmap</h2>
-    <p class="lede">v0.2.0 is the working core. Next: live intelligence, deeper fixes, team workflow.</p>
+    <p class="lede">v0.3.0 is the working core — verified, not just drafted. Next: deeper fixes, team workflow, vendor partnerships.</p>
     <div class="road">
       <div class="card">
-        <span class="ver">v0.3 — live intelligence</span>
+        <span class="ver">v0.3 — shipped ✓</span>
         <ul>
-          <li>Wire RSS / GitHub-release fetchers for Twilio, Slack, Stripe</li>
-          <li>Nightly snapshot refresh + per-vendor drift history</li>
-          <li>Drift against observed traffic, not just specs</li>
+          <li>RSS/Atom changelog scanning with deprecation-signal matching</li>
+          <li>Timestamped OpenAPI snapshot history + CI-friendly drift exit codes</li>
+          <li>Executed verification: run contract tests in an isolated sandbox</li>
+          <li>3 new fixers: GitHub query-auth, Salesforce versions, Mailchimp v2</li>
         </ul>
       </div>
       <div class="card">
         <span class="ver">v0.4 — deeper fixes</span>
         <ul>
-          <li>Fixers for the long tail (Twitter, Reddit, GitHub auth…)</li>
+          <li>Fixers for the long tail (Twitter, Reddit, more auth migrations)</li>
           <li>Multi-file migrations, not just single-file</li>
-          <li>Run the contract test before proposing the PR</li>
+          <li>Drift against observed traffic, not just specs</li>
         </ul>
       </div>
       <div class="card">

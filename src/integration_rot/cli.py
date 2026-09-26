@@ -1,7 +1,8 @@
-"""CLI: integration-rot scan | check | fix | drift | propose | demo"""
+"""CLI: integration-rot scan | check | fix | verify | drift | snapshot | fetch | propose | demo"""
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import date
@@ -9,11 +10,12 @@ from pathlib import Path
 
 from . import __version__
 from .analyzer import analyze, print_console, to_json, to_markdown
-from .deprecations import fetch_all, load_db
+from .deprecations import draft_entries_from_feed, fetch_all, load_db
 from .fixer import draft_fix, write_fix
 from .proposer import build_pr_body, open_pr
 from .scanner import scan_repo
-from .schema_drift import check_drift, print_diff
+from .schema_drift import check_drift, check_drift_history, print_diff
+from .verifier import print_evidence, verify_fix
 
 
 def cmd_scan(args) -> int:
@@ -98,6 +100,54 @@ def cmd_drift(args) -> int:
     print_diff(diff)
     # exit code 1 when drift is detected (CI-friendly, like `check`)
     return 1 if not diff.empty() else 0
+
+
+def cmd_snapshot(args) -> int:
+    diff, new_path, prev = check_drift_history(args.vendor, args.spec)
+    print(f"Saved snapshot: {new_path}")
+    if prev is None:
+        print("First snapshot — baseline recorded, nothing to diff against yet.")
+        print("Run again after the vendor publishes a new spec version.")
+        return 0
+    print(f"Diffed against previous snapshot: {prev.name}")
+    print_diff(diff)
+    # exit code 1 when drift is detected (CI-friendly, like `check`/`drift`)
+    return 1 if not diff.empty() else 0
+
+
+def cmd_fetch(args) -> int:
+    try:
+        drafts = draft_entries_from_feed(args.vendor, args.feed)
+    except Exception as e:
+        print(f"error: could not read feed: {e}", file=sys.stderr)
+        return 2
+    if not drafts:
+        print(f"No deprecation signals found in {args.feed}.")
+        return 0
+    print(f"{len(drafts)} candidate(s) from {args.feed} — "
+          "REVIEW BEFORE ADDING TO THE DB:\n")
+    for d in drafts:
+        print(f"- {d['candidate_title']} ({d['published'] or 'no date'})")
+        print(f"  signals: {', '.join(d['matched_signals'])}")
+        print(f"  link: {d['link']}")
+    if args.output:
+        Path(args.output).write_text(json.dumps(drafts, indent=2))
+        print(f"\nWrote {args.output}")
+    return 0
+
+
+def cmd_verify(args) -> int:
+    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs.update(_parse_params(args.param))
+    try:
+        res = verify_fix(args.repo, args.entry, args.file, **kwargs)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print_evidence(res)
+    if not res.changes_applied:
+        return 0
+    return 0 if res.passed else 1
 
 
 def cmd_propose(args) -> int:
@@ -206,6 +256,37 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override pinned snapshot path "
                          "(default: data/openapi_snapshots/<vendor>.json)")
     dr.set_defaults(fn=cmd_drift)
+
+    sn = sub.add_parser("snapshot",
+                        help="save a timestamped OpenAPI snapshot and diff it "
+                             "against the previous one (drift history)")
+    sn.add_argument("--vendor", required=True, help="vendor name, e.g. stripe")
+    sn.add_argument("--spec", required=True,
+                    help="fresh OpenAPI spec: local path or http(s) URL")
+    sn.set_defaults(fn=cmd_snapshot)
+
+    fe = sub.add_parser("fetch",
+                        help="scan a vendor changelog RSS/Atom feed for "
+                             "deprecation signals (candidates for review)")
+    fe.add_argument("--vendor", required=True, help="vendor name, e.g. twilio")
+    fe.add_argument("--feed", required=True,
+                    help="feed URL or local XML file")
+    fe.add_argument("--output", default=None,
+                    help="write candidate drafts to a JSON file")
+    fe.set_defaults(fn=cmd_fetch)
+
+    v = sub.add_parser("verify",
+                       help="apply a fix draft to an isolated copy of the repo "
+                            "and run its contract tests (executed verification)")
+    v.add_argument("repo", help="path to target repo")
+    v.add_argument("--entry", required=True, help="deprecation entry id, e.g. stripe-charges-api")
+    v.add_argument("--file", required=True, help="repo-relative source file to patch")
+    v.add_argument("--module", default="app", help="python module name for test import")
+    v.add_argument("--func", default="create_charge", help="function name for test import")
+    v.add_argument("--param", action="append", default=[],
+                   metavar="KEY=VALUE",
+                   help="extra fixer param (repeatable)")
+    v.set_defaults(fn=cmd_verify)
 
     pr = sub.add_parser("propose", help="open a GitHub PR with the fix draft")
     pr.add_argument("repo", help="path to target repo (changes must be on --head already)")

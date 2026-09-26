@@ -246,3 +246,154 @@ def test_registry_dispatches_all_fixers(tmp_path):
         draft = draft_fix(entry, tmp_path, fname, module="m")
         assert not draft.empty(), entry
         assert len(draft.tests) == 1, entry
+
+
+# ---------------------------------------------------------------------------
+# GitHub: ?access_token= -> Authorization header
+# ---------------------------------------------------------------------------
+
+GH_BEFORE = '''import requests
+
+
+def get_user(username, token):
+    resp = requests.get(f"https://api.github.com/users/{username}?access_token={token}")
+    return resp.json()
+
+
+def get_repo(owner, repo, token):
+    return requests.get(
+        "https://api.github.com/repos/" + owner + "/" + repo + "?access_token=" + token
+    ).json()
+'''
+
+
+def test_github_query_auth_rewrite(tmp_path):
+    from integration_rot.fixer import draft_github_query_auth_fix
+    (tmp_path / "gh.py").write_text(GH_BEFORE)
+    draft = draft_github_query_auth_fix(tmp_path, "gh.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert "access_token=" not in new
+    assert 'headers={"Authorization": f"Bearer {token}"}' in new
+    # concatenation case: `+ "?access_token=" + token` collapses cleanly
+    assert '+ "?access_token="' not in new and "+ token" not in new.split("headers")[0]
+    compile(new, "gh.py", "exec")
+
+
+def test_github_query_auth_no_match(tmp_path):
+    from integration_rot.fixer import draft_github_query_auth_fix
+    (tmp_path / "clean.py").write_text('import requests\nrequests.get("https://api.github.com/user")\n')
+    draft = draft_github_query_auth_fix(tmp_path, "clean.py")
+    assert draft.empty()
+
+
+def test_github_contract_test_source_level(tmp_path):
+    from integration_rot.fixer import generate_github_contract_test
+    path, content = generate_github_contract_test("gh.py")
+    assert path == "tests/test_github_auth_header_contract.py"
+    assert "access_token=" in content and "Authorization" in content
+    compile(content, path, "exec")
+
+
+# ---------------------------------------------------------------------------
+# Salesforce: retired versions -> v59.0
+# ---------------------------------------------------------------------------
+
+SF_BEFORE = '''import requests
+
+URL = "https://na1.salesforce.com/services/data/v27.0/sobjects/Account"
+
+
+def get_accounts(session_id):
+    return requests.get(URL, headers={"Authorization": f"Bearer {session_id}"})
+'''
+
+
+def test_salesforce_version_bump(tmp_path):
+    from integration_rot.fixer import draft_salesforce_version_fix
+    (tmp_path / "sf.py").write_text(SF_BEFORE)
+    draft = draft_salesforce_version_fix(tmp_path, "sf.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert "/services/data/v59.0/" in new
+    assert "v27.0" not in new
+    compile(new, "sf.py", "exec")
+
+
+def test_salesforce_version_kwarg(tmp_path):
+    from integration_rot.fixer import draft_salesforce_version_fix
+    (tmp_path / "sf.py").write_text("from simple_salesforce import Salesforce\nsf = Salesforce(version='28.0')\n")
+    draft = draft_salesforce_version_fix(tmp_path, "sf.py")
+    assert not draft.empty()
+    assert "version='59.0'" in draft.changes[0].new_content
+
+
+def test_salesforce_no_match(tmp_path):
+    from integration_rot.fixer import draft_salesforce_version_fix
+    (tmp_path / "sf.py").write_text('URL = "https://na1.salesforce.com/services/data/v59.0/sobjects/Account"\n')
+    draft = draft_salesforce_version_fix(tmp_path, "sf.py")
+    assert draft.empty()
+
+
+def test_salesforce_contract_test(tmp_path):
+    from integration_rot.fixer import generate_salesforce_contract_test
+    path, content = generate_salesforce_contract_test("sf.py")
+    assert path == "tests/test_salesforce_version_contract.py"
+    compile(content, path, "exec")
+
+
+# ---------------------------------------------------------------------------
+# Mailchimp: API 2.0 -> 3.0
+# ---------------------------------------------------------------------------
+
+MC_BEFORE = '''import requests
+
+API_KEY = "key-us1"
+
+
+def subscribe(email):
+    return requests.post(
+        "https://us1.api.mailchimp.com/2.0/lists/subscribe.json",
+        data={"apikey": API_KEY, "id": "list1", "email": {"email": email}},
+    ).json()
+'''
+
+
+def test_mailchimp_v2_rewrite(tmp_path):
+    from integration_rot.fixer import draft_mailchimp_v2_fix
+    (tmp_path / "mc.py").write_text(MC_BEFORE)
+    draft = draft_mailchimp_v2_fix(tmp_path, "mc.py")
+    assert not draft.empty()
+    new = draft.changes[0].new_content
+    assert "api.mailchimp.com/3.0/" in new
+    assert "api.mailchimp.com/2.0/" not in new
+    assert '"apikey"' not in new
+    assert "auth=('', API_KEY)" in new
+    compile(new, "mc.py", "exec")
+    assert any("operation-specific" in n for n in draft.notes)
+
+
+def test_mailchimp_no_match(tmp_path):
+    from integration_rot.fixer import draft_mailchimp_v2_fix
+    (tmp_path / "mc.py").write_text('x = "https://us1.api.mailchimp.com/3.0/lists"\n')
+    draft = draft_mailchimp_v2_fix(tmp_path, "mc.py")
+    assert draft.empty()
+
+
+def test_mailchimp_contract_test(tmp_path):
+    from integration_rot.fixer import generate_mailchimp_contract_test
+    path, content = generate_mailchimp_contract_test("mc.py")
+    assert path == "tests/test_mailchimp_v3_contract.py"
+    compile(content, path, "exec")
+
+
+def test_registry_dispatches_new_fixers(tmp_path):
+    (tmp_path / "gh.py").write_text(GH_BEFORE)
+    (tmp_path / "sf.py").write_text(SF_BEFORE)
+    (tmp_path / "mc.py").write_text(MC_BEFORE)
+    for entry, fname in [("github-api-query-auth", "gh.py"),
+                         ("salesforce-api-v21-v30", "sf.py"),
+                         ("mailchimp-api-2-retirement", "mc.py")]:
+        draft = draft_fix(entry, tmp_path, fname, module="m")
+        assert not draft.empty(), entry
+        assert len(draft.tests) == 1, entry

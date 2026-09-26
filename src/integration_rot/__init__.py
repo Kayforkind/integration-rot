@@ -4,4 +4,4 @@ Monitors third-party API dependencies, detects deprecations/schema drift,
 and drafts code fixes with contract tests.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -14,3 +14,6 @@ venv/
 # Demo secrets (never commit real keys)
 *.key
 .env
+
+# OpenAPI snapshot history (runtime artifact of `snapshot`; pinned snapshots stay tracked)
+data/openapi_snapshots/*/

@@ -4,7 +4,9 @@ For deprecation entries flagged `fix_available`, generates a concrete code
 patch (unified diff) plus a contract-test sketch. Implemented migrations:
 Stripe Charges API -> PaymentIntents, Twilio Authy -> Verify v2,
 SendGrid v2 -> v3 mail/send, Plaid /transactions/get -> /transactions/sync,
-Slack RTM -> Socket Mode. Other entries raise `KeyError` by design.
+Slack RTM -> Socket Mode, GitHub ?access_token= -> Authorization header,
+Salesforce retired API versions -> v59.0, Mailchimp API 2.0 -> 3.0.
+Other entries raise `KeyError` by design.
 """
 from __future__ import annotations
 
@@ -756,6 +758,343 @@ def test_socket_mode_contract(mock_web_client, mock_socket_client):
 
 
 # ---------------------------------------------------------------------------
+# GitHub: ?access_token= query param -> Authorization header
+# ---------------------------------------------------------------------------
+
+_GH_URL_LIT_RE = re.compile(
+    r"(?P<p>[fF]?)(?P<q>['\"])(?P<url>[^'\"]*?access_token=[^'\"]*?)(?P=q)")
+_REQ_CALL_RE = re.compile(
+    r"requests\.(get|post|put|patch|delete|head|options|request)\s*\(")
+
+
+def _enclosing_requests_call(source: str, pos: int):
+    """Return (match, open_idx, after) for the innermost requests.*() call
+    containing `pos`, or None."""
+    best = None
+    for m in _REQ_CALL_RE.finditer(source):
+        open_idx = m.end() - 1
+        try:
+            _, after = _extract_balanced_args(source, open_idx)
+        except ValueError:
+            continue
+        if m.start() <= pos < after:
+            best = (m, open_idx, after)  # later matches are more deeply nested
+    return best
+
+
+def _strip_token_param(url: str) -> str:
+    """Remove the access_token query parameter, keeping the rest of the URL."""
+    new_url = re.sub(r"\?access_token=[^&]*&", "?", url)
+    return re.sub(r"[?&]access_token=[^&]*", "", new_url)
+
+
+def _token_expr(url: str, is_fstring: bool, after_literal: str
+               ) -> tuple[str, bool, list[str], int]:
+    """Extract the token expression from a URL containing access_token=.
+
+    Returns (expr, is_literal_secret, notes, concat_len) where concat_len is
+    the number of source characters after the string literal that form the
+    `+ token` concatenation (0 when the token is inside the literal).
+    """
+    notes: list[str] = []
+    tm = re.search(r"[?&]access_token=([^&]*)", url)
+    part = tm.group(1) if tm else ""
+    if is_fstring and part.startswith("{"):
+        inner = part[1:].rstrip("}")
+        expr = inner.split("!")[0].split(":")[0].strip() or "TODO_TOKEN"
+        return expr, False, notes, 0
+    if part == "" and not is_fstring:
+        cm = re.match(r"(\s*\+\s*)([A-Za-z_][A-Za-z0-9_\.]*)", after_literal)
+        if cm:
+            return cm.group(2), False, notes, len(cm.group(0))
+    if part and not part.startswith("{"):
+        notes.append("the access token was hardcoded in source — move it to an "
+                     "environment variable or secret manager")
+        return repr(part), True, notes, 0
+    notes.append("could not resolve the token expression — set the Authorization "
+                 "header value explicitly (marked TODO)")
+    return '"TODO_TOKEN"', True, notes, 0
+
+
+def draft_github_query_auth_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a GitHub ?access_token= -> Authorization header migration."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="github-api-query-auth")
+    new_source = original
+    count = 0
+
+    for m in reversed(list(_GH_URL_LIT_RE.finditer(original))):
+        lit_start, lit_end = m.span()
+        is_f = bool(m.group("p"))
+        quote = m.group("q")
+        url = m.group("url")
+        # after_literal comes from the pristine source: later (already-applied)
+        # replacements sit after this match and must not pollute it.
+        expr, is_literal, notes, concat_len = _token_expr(
+            url, is_f, original[lit_end:lit_end + 60])
+        draft.notes.extend(notes)
+        new_url = _strip_token_param(url)
+        drop_literal = False
+        if new_url == "":
+            # the literal was only the token fragment (string concatenation):
+            # drop it together with the preceding `+`
+            pre = new_source[:lit_start]
+            m2 = re.search(r"\+\s*$", pre)
+            if m2:
+                lit_start = m2.start()
+                drop_literal = True
+        replacement = "" if drop_literal else (("f" if is_f else "")
+                      + quote + new_url + quote)
+        new_source = (new_source[:lit_start] + replacement
+                      + new_source[lit_end + concat_len:])
+
+        call = _enclosing_requests_call(new_source, lit_start)
+        if call is None:
+            draft.notes.append(
+                "URL is not inside a requests.*() call — add "
+                f"headers={{\"Authorization\": \"Bearer \" + {expr}}} manually")
+            count += 1
+            continue
+        _, open_idx, after = call
+        arg_text, _ = _extract_balanced_args(new_source, open_idx)
+        if re.search(r"(^|,)\s*headers\s*=", arg_text):
+            draft.notes.append(
+                "call already passes headers= — merge "
+                f"'Authorization': 'Bearer {{...}}' ({expr}) into it manually")
+        else:
+            if is_f or (expr.isidentifier()):
+                header_code = 'f"Bearer {' + expr + '}"'
+            else:
+                header_code = f'"Bearer " + {expr}'
+            insertion = f', headers={{"Authorization": {header_code}}}'
+            new_source = new_source[:after - 1] + insertion + new_source[after - 1:]
+        count += 1
+
+    if re.search(r"[?&]client_(id|secret)=", new_source):
+        draft.notes.append(
+            "client_id/client_secret in the query string also needs migration — "
+            "use HTTP Basic auth (base64 client_id:client_secret) on the OAuth "
+            "token endpoint instead; left for manual review")
+
+    if count == 0:
+        draft.notes.append("no ?access_token= usage found — nothing to draft")
+        return draft
+    draft.notes.insert(0, f"moved {count} access_token(s) from URL query string "
+                          "to the Authorization header")
+    draft.notes.append("GitHub removed query-param auth in Sep 2021 — tokens in URLs "
+                       "also leak into logs and caches, so this is a security fix too")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_github_contract_test(rel_path: str) -> tuple[str, str]:
+    """Source-level contract test: no credentials in URLs, header auth used."""
+    path = "tests/test_github_auth_header_contract.py"
+    content = f'''"""Contract test for the GitHub query-param auth -> Authorization header migration.
+
+Source-level contract: credentials must not travel in URL query strings and
+requests must carry an Authorization header. Runs with pytest, no network.
+"""
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parent.parent / "{rel_path}"
+
+
+def test_no_query_param_credentials():
+    src = SRC.read_text()
+    assert "access_token=" not in src, \\
+        "credential still passed via URL query string"
+
+
+def test_authorization_header_present():
+    src = SRC.read_text()
+    assert "Authorization" in src, \\
+        "migrated code must send an Authorization header"
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
+# Salesforce: Platform API v21.0-v30.0 -> v59.0
+# ---------------------------------------------------------------------------
+
+_SF_URL_RE = re.compile(r"/services/data/v(2[1-9]|30)(\.\d+)?")
+_SF_VERSION_KWARG_RE = re.compile(r"\bversion\s*=\s*(['\"])(2[1-9]|30)(\.\d+)?\1")
+_SF_TARGET = "v59.0"
+
+
+def draft_salesforce_version_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a Salesforce retired API version -> v59.0 migration."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="salesforce-api-v21-v30")
+    new_source = original
+    count = 0
+
+    new_source, n = _SF_URL_RE.subn("/services/data/" + _SF_TARGET, new_source)
+    count += n
+
+    def _kwarg_sub(m):
+        return f"version={m.group(1)}{_SF_TARGET.lstrip('v')}{m.group(1)}"
+    new_source, n = _SF_VERSION_KWARG_RE.subn(_kwarg_sub, new_source)
+    count += n
+
+    if count == 0:
+        draft.notes.append("no retired Salesforce API version usage found — nothing to draft")
+        return draft
+    draft.notes.insert(0, f"bumped {count} Salesforce API version reference(s) to {_SF_TARGET}")
+    draft.notes.append("v21.0–v30.0 are retired and return errors; v59.0 (Winter '24) is a "
+                       "safe, long-supported target — newer versions exist if you want them")
+    draft.notes.append("verify response shapes: some objects gained/renamed fields between "
+                       "v30 and v59 — run your integration tests against a sandbox")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_salesforce_contract_test(rel_path: str) -> tuple[str, str]:
+    """Source-level contract test: retired versions gone, v59.0 used."""
+    path = "tests/test_salesforce_version_contract.py"
+    content = f'''"""Contract test for the Salesforce retired-version -> v59.0 migration.
+
+Source-level contract: no references to retired v21.0–v30.0 remain, and the
+supported target version is used. Runs with pytest, no network.
+"""
+import re
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parent.parent / "{rel_path}"
+RETIRED_RE = re.compile(r"/services/data/v(2[1-9]|30)\\.")
+
+
+def test_no_retired_versions():
+    src = SRC.read_text()
+    assert not RETIRED_RE.search(src), "retired Salesforce API version still referenced"
+
+
+def test_supported_version_used():
+    src = SRC.read_text()
+    assert "/services/data/v59.0" in src or "'59.0'" in src or '"59.0"' in src, \\
+        "expected the v59.0 target version in migrated code"
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
+# Mailchimp: API 2.0 -> Marketing API 3.0
+# ---------------------------------------------------------------------------
+
+_MC_URL_RE = re.compile(r"https://([A-Za-z0-9-]+)\.api\.mailchimp\.com/2\.0/")
+_MC_APIKEY_RE = re.compile(r"""(['"])apikey\1\s*:\s*([^,}\n]+),?""")
+_MC_SDK_RE = re.compile(r"mailchimp\.Mailchimp\s*\(")
+
+
+def draft_mailchimp_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a Mailchimp API 2.0 -> 3.0 migration for one Python file."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="mailchimp-api-v2-retirement")
+    new_source = original
+    count = 0
+
+    new_source, n = _MC_URL_RE.subn(r"https://\1.api.mailchimp.com/3.0/", new_source)
+    count += n
+    if n:
+        draft.notes.append("endpoint base moved to /3.0/ — v3 endpoints are "
+                           "resource-oriented and differ per operation (see notes)")
+
+    # apikey in payload/query -> HTTP basic auth. Scope to mailchimp calls.
+    for m in reversed(list(_REQ_CALL_RE.finditer(new_source))):
+        open_idx = m.end() - 1
+        try:
+            arg_text, after = _extract_balanced_args(new_source, open_idx)
+        except ValueError:
+            continue
+        if "api.mailchimp.com" not in arg_text:
+            continue
+        km = _MC_APIKEY_RE.search(arg_text)
+        if not km:
+            continue
+        expr = km.group(2).strip()
+        arg_text = _MC_APIKEY_RE.sub("", arg_text, count=1)
+        if not re.search(r"(^|,)\s*auth\s*=", arg_text):
+            arg_text = arg_text.rstrip()
+            if arg_text.endswith(","):
+                arg_text = arg_text[:-1].rstrip()
+            arg_text = arg_text + f", auth=('', {expr})"
+        else:
+            draft.notes.append("call already passes auth= — dropped the apikey payload "
+                               "entry; confirm the existing auth uses the API key")
+        new_source = new_source[:open_idx + 1] + arg_text + new_source[after - 1:]
+        count += 1
+        draft.notes.append(f"moved apikey from the payload to HTTP basic auth "
+                           f"(auth=('', {expr})) — v3 authenticates as user 'anystring' "
+                           "with the API key as password")
+
+    if _MC_SDK_RE.search(new_source):
+        draft.notes.append("mailchimp.Mailchimp() (v2 SDK) has no drop-in v3 equivalent — "
+                           "switch to the mailchimp-marketing package and configure with "
+                           "client.set_config({'api_key': KEY, 'server': 'usX'})")
+
+    if count == 0:
+        draft.notes.append("no Mailchimp API 2.0 usage found — nothing to draft")
+        return draft
+    draft.notes.insert(0, f"rewrote {count} Mailchimp API 2.0 usage(s) toward 3.0")
+    draft.notes.append("v3 payloads are operation-specific and NOT a rename of v2: e.g. "
+                       "/2.0/lists/subscribe -> POST /3.0/lists/{list_id}/members with "
+                       "{'email_address': ..., 'status': 'subscribed'} — remap each call "
+                       "against the v3 reference before merging")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_mailchimp_contract_test(rel_path: str) -> tuple[str, str]:
+    """Source-level contract test: v2 endpoints/auth gone, v3 in use."""
+    path = "tests/test_mailchimp_v3_contract.py"
+    content = f'''"""Contract test for the Mailchimp API 2.0 -> 3.0 migration.
+
+Source-level contract: no v2 endpoints or apikey-in-payload auth remain.
+Runs with pytest, no network.
+"""
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parent.parent / "{rel_path}"
+
+
+def test_no_v2_endpoints():
+    src = SRC.read_text()
+    assert "api.mailchimp.com/2.0" not in src, "Mailchimp API v2 endpoint still referenced"
+
+
+def test_no_apikey_in_payload():
+    src = SRC.read_text()
+    assert '"apikey"' not in src and "'apikey'" not in src, \\
+        "v2 apikey auth still in payload — v3 uses HTTP basic auth"
+
+
+def test_v3_base_used():
+    src = SRC.read_text()
+    assert "api.mailchimp.com/3.0" in src, "expected the v3 API base in migrated code"
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -800,6 +1139,24 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
         if not draft.empty():
             test_path, test_content = generate_slack_contract_test(
                 module=kwargs.get("module", "app"))
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "github-api-query-auth":
+        draft = draft_github_query_auth_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_github_contract_test(rel_path)
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "salesforce-api-v21-v30":
+        draft = draft_salesforce_version_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_salesforce_contract_test(rel_path)
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "mailchimp-api-2-retirement":
+        draft = draft_mailchimp_v2_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_mailchimp_contract_test(rel_path)
             draft.tests.append((test_path, test_content))
         return draft
     raise KeyError(f"no fix drafter for entry '{entry_id}' (v2: add vendor fixer)")

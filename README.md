@@ -1,6 +1,6 @@
 # Integration-rot Autopilot
 
-[![version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/Kayforkind/integration-rot)
+[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/Kayforkind/integration-rot)
 [![tests](https://img.shields.io/badge/tests-58%20passing-brightgreen)](https://github.com/Kayforkind/integration-rot)
 [![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -50,12 +50,20 @@ pull request for you.
 │ + API host│   │  entries +     │   │ risk     │   │ draft + │   │ PR with  │
 │ heuristic │   │  feed fetchers │   │ report   │   │ contract│   │ evidence │
 └───────────┘   └────────────────┘   └──────────┘   │ test    │   └──────────┘
-                                                   └─────────┘
+                                                   └────┬────┘
+                                                        ▼
+                                                  ┌──────────┐
+                                                  │  VERIFY  │
+                                                  │ executed │
+                                                  │ isolated │
+                                                  │ sandbox  │
+                                                  └──────────┘
                                                         ▲
                                                    ┌─────────┐
                                                    │  DRIFT  │
                                                    │ OpenAPI │
                                                    │ diffing │
+                                                   │ + hist. │
                                                    └─────────┘
 ```
 
@@ -192,6 +200,12 @@ integration-rot fix /tmp/proof --entry stripe-charges-api --file app.py \
 
 cd /tmp/proof && python -m pytest tests/test_stripe_payment_intent_contract.py -q
 # 1 passed — the migration holds its contract
+
+# or do it in one step: apply the fix to an isolated copy and run the
+# contract tests there — the target repo is never touched
+integration-rot verify /tmp/proof --entry stripe-charges-api --file app.py
+# === evidence: stripe-charges-api on app.py ===
+# Contract tests run: 1 (PASS)
 ```
 
 That's the core loop: **detect → draft → prove → propose.**
@@ -211,7 +225,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.2.0
+integration-rot --version   # integration-rot 0.3.0
 ```
 
 ---
@@ -235,8 +249,17 @@ integration-rot fix /path/to/repo --entry stripe-charges-api --file app.py
 # write the patch and test into the repo
 integration-rot fix /path/to/repo --entry stripe-charges-api --file app.py --apply
 
+# execute the fix in an isolated sandbox and run the contract tests there
+integration-rot verify /path/to/repo --entry stripe-charges-api --file app.py
+
 # check a vendor's API for schema drift
 integration-rot drift --vendor stripe --spec <path-or-URL-to-openapi.json>
+
+# record a timestamped snapshot and diff against the previous one
+integration-rot snapshot --vendor stripe --spec <path-or-URL-to-openapi.json>
+
+# scan a vendor changelog feed for new deprecation signals
+integration-rot fetch --vendor twilio --feed <rss-or-atom-url>
 
 # open a PR with the fix (needs GITHUB_TOKEN)
 export GITHUB_TOKEN=ghp_...
@@ -354,7 +377,7 @@ Applied. Wrote: mailer.py, tests/test_sendgrid_v3_contract.py
 | `--param KEY=VALUE` | Extra fixer-specific params, repeatable (e.g. Twilio's `start_func`/`check_func`) |
 | `--apply` | Write the patch and contract test to the repo (default is dry-run print) |
 
-Fixers available in v0.2.0:
+Fixers available in v0.3.0:
 
 | Entry id | Migration |
 |----------|-----------|
@@ -363,6 +386,39 @@ Fixers available in v0.2.0:
 | `sendgrid-v2-api` | `/v2/mail/send` flat payload → `/v3/mail/send` nested payload |
 | `plaid-legacy-transactions` | `/transactions/get` → cursor-based `/transactions/sync` |
 | `slack-rtm-api` | RTMClient → Socket Mode |
+| `github-api-query-auth` | `?access_token=` in URLs → `Authorization` header (also a credential-leak fix) |
+| `salesforce-api-v21-v30` | retired `/services/data/v21.0`–`v30.0` → `v59.0` |
+| `mailchimp-api-v2-retirement` | `/2.0/` endpoints → `/3.0/`, `apikey` payload → HTTP basic auth |
+
+### `verify` — executed verification with a migration-evidence bundle
+
+```
+usage: integration-rot verify [-h] --entry ENTRY --file FILE [--module MODULE]
+                              [--func FUNC] [--param KEY=VALUE] repo
+```
+
+`verify` drafts the fix, applies it to an **isolated copy** of the repo, and
+runs the generated contract tests with pytest — the migration is not just
+drafted, it is *executed*. Your working tree is never touched. Exit code is
+0 only if every contract test passes.
+
+```bash
+$ integration-rot verify ./myrepo --entry stripe-charges-api --file app.py
+
+=== evidence: stripe-charges-api on app.py ===
+Files changed in sandbox: app.py, tests/test_stripe_payment_intent_contract.py
+Contract tests run: 1 (PASS)
+--- pytest output ---
+.                                                                        [100%]
+1 passed in 0.16s
+--- end pytest output ---
+Reviewer notes:
+  - rewrote 1 stripe.Charge.create call(s) to stripe.PaymentIntent.create (SCA-ready)
+  ...
+```
+
+Takes the same `--module` / `--func` / `--param` fixer params as `fix`.
+Use it in CI to gate merges on *proven* migrations, not just drafted ones.
 
 ### `drift` — detect OpenAPI schema drift
 
@@ -391,6 +447,61 @@ $ integration-rot drift --vendor stripe --spec ./candidate-spec.json; echo "exit
 | `--vendor NAME` | **(required)** vendor, matches `data/openapi_snapshots/<vendor>.json` |
 | `--spec PATH-OR-URL` | **(required)** fresh OpenAPI JSON: local file or `http(s)://` URL |
 | `--snapshot PATH` | Override the pinned snapshot path |
+
+### `snapshot` — timestamped OpenAPI snapshots with drift history
+
+While `drift` compares against one pinned snapshot, `snapshot` keeps a
+**timestamped history** under `data/openapi_snapshots/<vendor>/` and diffs
+each new spec against the previous one — drift over time, not just drift
+from the original pin. History directories are gitignored runtime artifacts.
+
+```
+usage: integration-rot snapshot [-h] --vendor VENDOR --spec SPEC
+```
+
+```bash
+$ integration-rot snapshot --vendor stripe --spec ./stripe-spec.json
+Saved snapshot: data/openapi_snapshots/stripe/20260926-152345-638706.json
+First snapshot — baseline recorded, nothing to diff against yet.
+
+$ integration-rot snapshot --vendor stripe --spec ./stripe-spec-v2.json
+Saved snapshot: data/openapi_snapshots/stripe/20260926-152345-806187.json
+Diffed against previous snapshot: 20260926-152345-638706.json
+
+Schema drift for stripe: stripe: 1 endpoint(s) added, 0 removed, 0 changed
+
+  [ADDED]   POST /v1/payment_intents/incremental_authorization
+
+# exit code is 1 when drift IS found — run it on a schedule and alert on it
+```
+
+### `fetch` — scan a vendor changelog feed for deprecation signals
+
+`fetch` polls a vendor changelog RSS/Atom feed (URL or local XML file),
+matches items against deprecation keywords, and prints **candidates for
+human review** — a tripwire, not a source of truth. Verify every candidate
+against vendor docs before promoting it into `data/deprecations.json`.
+
+```
+usage: integration-rot fetch [-h] --vendor VENDOR --feed FEED [--output OUTPUT]
+```
+
+```bash
+$ integration-rot fetch --vendor twilio --feed https://www.twilio.com/en-us/changelog.rss
+1 candidate(s) from https://www.twilio.com/en-us/changelog.rss — REVIEW BEFORE ADDING TO THE DB:
+
+- Authy API deprecation: migrate to Verify v2 (Mon, 01 Feb 2021 00:00:00 GMT)
+  signals: deprecat, sunset
+  link: https://www.twilio.com/changelog/authy-deprecation
+
+# save the candidates as JSON for a review workflow
+$ integration-rot fetch --vendor twilio --feed ./changelog.xml --output /tmp/drafts.json
+```
+
+Programmatic use: `RSSChangelogFetcher(vendor, feed_url)` in
+`src/integration_rot/deprecations.py` implements the same pipeline and plugs
+into the `FETCHERS` registry, so `fetch_all()` can mix live feeds with the
+curated DB per vendor.
 
 ### `propose` — open a GitHub PR with the fix draft
 
@@ -494,8 +605,11 @@ class AcmeChangelogFetcher(FeedFetcher):
 FETCHERS["acme"] = AcmeChangelogFetcher()
 ```
 
-`RSSChangelogFetcher` and `GitHubReleasesFetcher` ship as documented stubs —
-wire in `feedparser` + an extractor and register the instance in `FETCHERS`.
+`RSSChangelogFetcher` is a real implementation: it polls an RSS/Atom feed
+(stdlib only — no feedparser dependency), matches deprecation keywords, and
+returns `informational` entries flagged for review. `GitHubReleasesFetcher`
+remains a documented stub — wire in release watching and register the
+instance in `FETCHERS`.
 
 ---
 
@@ -755,4 +869,4 @@ integration-rot/
 
 ## License
 
-MIT © Kayforkind. See [LICENSE](LICENSE) (to be added).
+MIT © Kayforkind. See [LICENSE](LICENSE).
