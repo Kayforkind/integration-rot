@@ -1,7 +1,8 @@
-"""CLI: integration-rot scan | check | fix | demo"""
+"""CLI: integration-rot scan | check | fix | drift | propose | demo"""
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -10,7 +11,9 @@ from . import __version__
 from .analyzer import analyze, print_console, to_json, to_markdown
 from .deprecations import fetch_all, load_db
 from .fixer import draft_fix, write_fix
+from .proposer import build_pr_body, open_pr
 from .scanner import scan_repo
+from .schema_drift import check_drift, print_diff
 
 
 def cmd_scan(args) -> int:
@@ -45,10 +48,23 @@ def cmd_check(args) -> int:
                     for f in report.findings) else 0
 
 
+def _parse_params(pairs: list[str] | None) -> dict:
+    """Parse KEY=VALUE extra fixer params from --param flags."""
+    out = {}
+    for p in pairs or []:
+        if "=" not in p:
+            print(f"error: --param must be KEY=VALUE, got {p!r}", file=sys.stderr)
+            sys.exit(2)
+        k, v = p.split("=", 1)
+        out[k.strip()] = v
+    return out
+
+
 def cmd_fix(args) -> int:
+    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs.update(_parse_params(args.param))
     try:
-        draft = draft_fix(args.entry, args.repo, args.file,
-                          module=args.module, func_name=args.func)
+        draft = draft_fix(args.entry, args.repo, args.file, **kwargs)
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -70,6 +86,58 @@ def cmd_fix(args) -> int:
         print(f"\nApplied. Wrote: {', '.join(written)}")
     else:
         print("\nDry run — pass --apply to write the patch and test to the repo.")
+    return 0
+
+
+def cmd_drift(args) -> int:
+    try:
+        diff = check_drift(args.vendor, args.spec, args.snapshot)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print_diff(diff)
+    # exit code 1 when drift is detected (CI-friendly, like `check`)
+    return 1 if not diff.empty() else 0
+
+
+def cmd_propose(args) -> int:
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("error: GITHUB_TOKEN is not set — export a token with `repo` "
+              "scope to open PRs", file=sys.stderr)
+        return 2
+    kwargs = {"module": args.module, "func_name": args.func}
+    kwargs.update(_parse_params(args.param))
+    try:
+        draft = draft_fix(args.entry, args.repo, args.file, **kwargs)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if draft.empty():
+        print("Nothing to propose — the fixer found no matching code.")
+        for n in draft.notes:
+            print(f"  note: {n}")
+        return 0
+
+    entries = {e.id: e for e in load_db()}
+    entry = entries.get(args.entry)
+    if entry is None:
+        print(f"error: unknown deprecation entry '{args.entry}'", file=sys.stderr)
+        return 2
+    scan = scan_repo(args.repo)
+    report = analyze(scan, [entry])
+    findings = [f for f in report.findings if f.entry.id == entry.id]
+
+    title = args.title or (f"fix: migrate deprecated {entry.vendor} API "
+                           f"({entry.id}) [integration-rot]")
+    body = build_pr_body(entry, draft, findings)
+    try:
+        pr = open_pr(args.owner, args.repo_name, head=args.head, base=args.base,
+                     title=title, body=body, token=token, draft_pr=args.draft)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"Pull request opened: {pr.get('html_url')}")
     return 0
 
 
@@ -102,7 +170,8 @@ def cmd_demo(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="integration-rot",
-        description="Integration-rot autopilot MVP: find deprecated API usage, draft fixes.")
+        description="Integration-rot autopilot: find deprecated API usage, "
+                    "detect schema drift, draft fixes, and propose PRs.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -123,8 +192,36 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--file", required=True, help="repo-relative source file to patch")
     f.add_argument("--module", default="app", help="python module name for test import")
     f.add_argument("--func", default="create_charge", help="function name for test import")
+    f.add_argument("--param", action="append", default=[],
+                   metavar="KEY=VALUE",
+                   help="extra fixer param, e.g. --param start_func=begin_otp (repeatable)")
     f.add_argument("--apply", action="store_true", help="write patch + test to repo")
     f.set_defaults(fn=cmd_fix)
+
+    dr = sub.add_parser("drift", help="diff a vendor OpenAPI spec against the pinned snapshot")
+    dr.add_argument("--vendor", required=True, help="vendor name, e.g. stripe")
+    dr.add_argument("--spec", required=True,
+                    help="fresh OpenAPI spec: local path or http(s) URL")
+    dr.add_argument("--snapshot", default=None,
+                    help="override pinned snapshot path "
+                         "(default: data/openapi_snapshots/<vendor>.json)")
+    dr.set_defaults(fn=cmd_drift)
+
+    pr = sub.add_parser("propose", help="open a GitHub PR with the fix draft")
+    pr.add_argument("repo", help="path to target repo (changes must be on --head already)")
+    pr.add_argument("--entry", required=True, help="deprecation entry id")
+    pr.add_argument("--file", required=True, help="repo-relative source file to patch")
+    pr.add_argument("--owner", required=True, help="GitHub repo owner/org")
+    pr.add_argument("--repo-name", required=True, help="GitHub repo name")
+    pr.add_argument("--head", required=True, help="branch containing the fix")
+    pr.add_argument("--base", default="main", help="base branch (default: main)")
+    pr.add_argument("--title", default=None, help="PR title (default: generated)")
+    pr.add_argument("--draft", action="store_true", help="open as a draft PR")
+    pr.add_argument("--module", default="app", help="python module name for test import")
+    pr.add_argument("--func", default="create_charge", help="function name for test import")
+    pr.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
+                    help="extra fixer param (repeatable)")
+    pr.set_defaults(fn=cmd_propose)
 
     d = sub.add_parser("demo", help="run the full pipeline on the bundled sample app")
     d.set_defaults(fn=cmd_demo)

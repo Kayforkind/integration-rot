@@ -1,9 +1,10 @@
 """Fix drafter.
 
 For deprecation entries flagged `fix_available`, generates a concrete code
-patch (unified diff) plus a contract-test sketch. MVP implements the
-Stripe Charges API -> PaymentIntents migration; other vendors are registered
-as stubs for v2.
+patch (unified diff) plus a contract-test sketch. Implemented migrations:
+Stripe Charges API -> PaymentIntents, Twilio Authy -> Verify v2,
+SendGrid v2 -> v3 mail/send, Plaid /transactions/get -> /transactions/sync,
+Slack RTM -> Socket Mode. Other entries raise `KeyError` by design.
 """
 from __future__ import annotations
 
@@ -222,6 +223,539 @@ def test_payment_intent_contract(mock_create):
 
 
 # ---------------------------------------------------------------------------
+# Twilio: Authy API -> Verify v2
+# ---------------------------------------------------------------------------
+
+_AUTHY_IMPORT_RE = re.compile(r"from\s+authy\.api\s+import\s+AuthyApiClient")
+_AUTHY_CLIENT_RE = re.compile(r"AuthyApiClient\s*\(")
+_VERIFY_START_RE = re.compile(r"(\w+)\.phones\.verification_start\s*\(")
+_VERIFY_CHECK_RE = re.compile(r"(\w+)\.phones\.verification_check\s*\(")
+
+
+def _migrate_verify_start_args(arg_text: str) -> tuple[str, list[str]]:
+    """Map Authy verification_start args to Verify v2 verifications.create kwargs."""
+    notes = []
+    parts = _split_top_level_kwargs(arg_text)
+    phone = country = via = None
+    positional = []
+    for p in parts:
+        m = re.match(r"(\w+)\s*=\s*(.*)$", p, re.S)
+        if m:
+            k, v = m.group(1), m.group(2).strip()
+            if k in ("phone_number", "phone"):
+                phone = v
+            elif k in ("country_code", "country"):
+                country = v
+            elif k == "via":
+                via = v
+            else:
+                notes.append(f"Authy kwarg `{k}` has no Verify equivalent — dropped, verify manually")
+        else:
+            positional.append(p)
+    if len(positional) > 0:
+        phone = phone or positional[0]
+    if len(positional) > 1:
+        country = country or positional[1]
+    if len(positional) > 2:
+        via = via or positional[2]
+    if phone is None or country is None:
+        notes.append("could not map phone/country args — set `to` explicitly")
+        to_expr = '"TODO:+E164_PHONE"'
+    else:
+        to_expr = f'f"+{{{country}}}{{{phone}}}"'
+    kwargs = [f"to={to_expr}", f"channel={via or '\"sms\"'}"]
+    return ", ".join(kwargs), notes
+
+
+def _migrate_verify_check_args(arg_text: str) -> tuple[str, list[str]]:
+    """Map Authy verification_check args to Verify v2 verification_checks.create."""
+    notes = []
+    parts = _split_top_level_kwargs(arg_text)
+    phone = country = code = None
+    positional = []
+    for p in parts:
+        m = re.match(r"(\w+)\s*=\s*(.*)$", p, re.S)
+        if m:
+            k, v = m.group(1), m.group(2).strip()
+            if k in ("phone_number", "phone"):
+                phone = v
+            elif k in ("country_code", "country"):
+                country = v
+            elif k in ("verification_code", "code", "token"):
+                code = v
+            else:
+                notes.append(f"Authy kwarg `{k}` has no Verify equivalent — dropped, verify manually")
+        else:
+            positional.append(p)
+    if len(positional) > 0:
+        phone = phone or positional[0]
+    if len(positional) > 1:
+        country = country or positional[1]
+    if len(positional) > 2:
+        code = code or positional[2]
+    if phone is None or country is None:
+        to_expr = '"TODO:+E164_PHONE"'
+        notes.append("could not map phone/country args — set `to` explicitly")
+    else:
+        to_expr = f'f"+{{{country}}}{{{phone}}}"'
+    if code is None:
+        code = '"TODO:CODE"'
+        notes.append("could not map the verification code arg — set `code` explicitly")
+    return f"to={to_expr}, code={code}", notes
+
+
+def draft_twilio_authy_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft an Authy API -> Twilio Verify v2 migration for one Python file."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="twilio-authy-api")
+    new_source = original
+    count = 0
+
+    if _AUTHY_IMPORT_RE.search(new_source):
+        new_source = _AUTHY_IMPORT_RE.sub(
+            "from twilio.rest import Client  # migrated from authy.api.AuthyApiClient",
+            new_source)
+        count += 1
+        draft.notes.append("AuthyApiClient(api_key) -> Client(account_sid, auth_token): "
+                           "Verify uses your Twilio Account SID + Auth Token, not the Authy key")
+    if _AUTHY_CLIENT_RE.search(new_source):
+        new_source = _AUTHY_CLIENT_RE.sub("Client(", new_source)
+        count += 1
+
+    for rx, migrator, new_call in (
+        (_VERIFY_START_RE, _migrate_verify_start_args, "verifications.create"),
+        (_VERIFY_CHECK_RE, _migrate_verify_check_args, "verification_checks.create"),
+    ):
+        for m in reversed(list(rx.finditer(new_source))):
+            obj = m.group(1)
+            open_idx = new_source.index("(", m.start())
+            arg_text, after = _extract_balanced_args(new_source, open_idx)
+            new_args, notes = migrator(arg_text)
+            draft.notes.extend(notes)
+            replacement = (f"{obj}.verify.v2.services(VERIFY_SERVICE_SID)."
+                           f"{new_call}({new_args})")
+            new_source = new_source[:m.start()] + replacement + new_source[after:]
+            count += 1
+
+    if count == 0:
+        draft.notes.append("no Authy API usage found — nothing to draft")
+        return draft
+
+    if "VERIFY_SERVICE_SID" not in original:
+        sid_line = ('VERIFY_SERVICE_SID = "VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"'
+                    "  # TODO: your Verify Service SID\n")
+        anchor = "from twilio.rest import Client"
+        idx = new_source.find(anchor)
+        if idx != -1:
+            eol = new_source.index("\n", idx) + 1
+            new_source = new_source[:eol] + sid_line + new_source[eol:]
+        else:
+            new_source = sid_line + "\n" + new_source
+    draft.notes.insert(0, f"rewrote {count} Authy API call(s) to Twilio Verify v2")
+    draft.notes.append("Authy `response.ok()` semantics differ — Verify returns status "
+                       "strings ('pending' / 'approved'); check `.status` explicitly")
+    draft.notes.append("create a Verify Service in the Twilio console and store its SID "
+                       "in VERIFY_SERVICE_SID")
+
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_twilio_contract_test(module: str, start_func: str = "start_verification",
+                                  check_func: str = "check_verification") -> tuple[str, str]:
+    """Generate a pytest contract test sketch for the Verify v2 migration."""
+    path = "tests/test_twilio_verify_contract.py"
+    content = f'''"""Contract test sketch for the Twilio Authy -> Verify v2 migration.
+
+Asserts the app drives the Verify v2 API (services -> verifications /
+verification_checks) instead of the retired Authy API. Uses unittest.mock.
+"""
+from unittest.mock import patch
+
+from {module} import {start_func}, {check_func}
+
+
+def _verify_service(mock_client_cls):
+    return mock_client_cls.return_value.verify.v2.services.return_value
+
+
+@patch("{module}.Client")
+def test_verify_start_contract(mock_client_cls):
+    svc = _verify_service(mock_client_cls)
+    svc.verifications.create.return_value.status = "pending"
+
+    {start_func}("4155552671", "1")
+
+    svc.verifications.create.assert_called_once()
+    _, kwargs = svc.verifications.create.call_args
+    assert kwargs["to"] == "+14155552671"
+    assert kwargs["channel"] in ("sms", "call", "email")
+
+
+@patch("{module}.Client")
+def test_verify_check_contract(mock_client_cls):
+    svc = _verify_service(mock_client_cls)
+    svc.verification_checks.create.return_value.status = "approved"
+
+    assert {check_func}("4155552671", "1", "123456") is not None
+
+    svc.verification_checks.create.assert_called_once()
+    _, kwargs = svc.verification_checks.create.call_args
+    assert kwargs["to"] == "+14155552671"
+    assert kwargs["code"] == "123456"
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
+# SendGrid: v2 mail/send -> v3 mail/send
+# ---------------------------------------------------------------------------
+
+_SG_V2_URL_RE = re.compile(r"api\.sendgrid\.com/v2/mail/send")
+_SG_CLIENT_RE = re.compile(r"sendgrid\.SendGridClient\s*\(")
+_SG_PAYLOAD_RE = re.compile(r"(data|json)\s*=\s*\{")
+
+
+def _migrate_sendgrid_payload(source: str, start: int) -> tuple[str, str, list[str]]:
+    """Rewrite a v2 flat mail payload dict to the v3 nested structure.
+
+    Returns (new_source, new_end_note, notes). If the payload can't be mapped
+    safely, returns the source unchanged with notes explaining the manual step.
+    """
+    notes = []
+    brace_idx = source.index("{", start)
+    # balanced-brace extraction
+    depth, i = 0, brace_idx
+    in_str: str | None = None
+    escaped = False
+    while i < len(source):
+        ch = source[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == in_str:
+                in_str = None
+        else:
+            if ch in ("'", '"'):
+                in_str = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        i += 1
+    dict_text = source[brace_idx:i + 1]
+    inner = dict_text[1:-1]
+    kv_re = re.compile(r"""(['"])((?:\\.|(?!\1).)*)\1\s*:\s*""")
+    pairs: list[tuple[str, str]] = []
+    pos = 0
+    for part in _split_top_level_kwargs(inner):
+        m = kv_re.match(part.strip())
+        if not m:
+            notes.append(f"could not parse payload entry `{part.strip()[:50]}` — "
+                         "migrate the v2 payload to v3 personalizations manually")
+            return source, "", notes
+        pairs.append((m.group(2), part.strip()[m.end():].strip()))
+    vals = dict(pairs)
+    to_v, from_v = vals.get("to"), vals.get("from")
+    subject_v, text_v, html_v = vals.get("subject"), vals.get("text"), vals.get("html")
+    unmapped = [k for k in vals if k not in ("to", "from", "subject", "text", "html")]
+    if unmapped:
+        notes.append(f"v2 payload keys have no direct v3 mapping, carried as "
+                     f"x-smtpapi note — verify: {', '.join(unmapped)}")
+    if to_v is None:
+        notes.append("no `to` in v2 payload — set personalizations[].to explicitly")
+        return source, "", notes
+    content_items = []
+    if text_v is not None:
+        content_items.append(f'{{"type": "text/plain", "value": {text_v}}}')
+    if html_v is not None:
+        content_items.append(f'{{"type": "text/html", "value": {html_v}}}')
+    if not content_items:
+        notes.append("no `text`/`html` body in v2 payload — add v3 `content` explicitly")
+        return source, "", notes
+    lines = ['{"personalizations": [{"to": [{"email": %s}]}]' % to_v]
+    if from_v is not None:
+        lines.append(f'"from": {{"email": {from_v}}}')
+    if subject_v is not None:
+        lines.append(f'"subject": {subject_v}')
+    lines.append(f'"content": [{", ".join(content_items)}]')
+    # rebuild the dict with clean indentation, and switch data= -> json=
+    # (v3 requires a JSON body, not form-encoded data)
+    line_start = source.rfind("\n", 0, start) + 1
+    base_indent = re.match(r"\s*", source[line_start:]).group(0)
+    inner = base_indent + "    "
+    new_dict = "{\n" + ",\n".join(inner + ln for ln in lines) + ",\n" + base_indent + "}"
+    new_source = source[:start] + "json=" + new_dict + source[i + 1:]
+    notes.insert(0, "rewrote the v2 flat mail payload to the v3 nested structure "
+                    "(personalizations / from / content)")
+    return new_source, "", notes
+
+
+def draft_sendgrid_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a SendGrid v2 -> v3 mail/send migration for one Python file."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="sendgrid-v2-api")
+    new_source = original
+    count = 0
+
+    if _SG_V2_URL_RE.search(new_source):
+        new_source = _SG_V2_URL_RE.sub("api.sendgrid.com/v3/mail/send", new_source)
+        count += 1
+        draft.notes.append("endpoint moved to /v3/mail/send — v3 requires the nested "
+                           "JSON payload and a v3 API key (same key usually works)")
+    if _SG_CLIENT_RE.search(new_source):
+        new_source = _SG_CLIENT_RE.sub("sendgrid.SendGridAPIClient(", new_source)
+        count += 1
+        draft.notes.append("SendGridClient -> SendGridAPIClient (v3 SDK class)")
+
+    for m in reversed(list(_SG_PAYLOAD_RE.finditer(new_source))):
+        if "sendgrid.com/v3" not in new_source[max(0, m.start() - 200):m.start() + 400]:
+            continue  # only rewrite payloads near a v3 URL
+        new_source, _, notes = _migrate_sendgrid_payload(new_source, m.start())
+        draft.notes.extend(notes)
+        count += 1
+
+    if count == 0:
+        draft.notes.append("no SendGrid v2 usage found — nothing to draft")
+        return draft
+    draft.notes.insert(0, f"rewrote {count} SendGrid v2 usage(s) to v3")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_sendgrid_contract_test(module: str, func_name: str = "send_email") -> tuple[str, str]:
+    """Generate a pytest contract test sketch for the SendGrid v3 migration."""
+    path = "tests/test_sendgrid_v3_contract.py"
+    content = f'''"""Contract test sketch for the SendGrid v2 -> v3 migration.
+
+Asserts the app POSTs to /v3/mail/send with the v3 nested payload shape.
+Uses unittest.mock — no network calls.
+"""
+from unittest.mock import patch
+
+import requests
+
+from {module} import {func_name}
+
+
+@patch("requests.post")
+def test_sendgrid_v3_contract(mock_post):
+    mock_post.return_value.status_code = 202
+
+    {func_name}("user@example.com", "Hello", "plain body")
+
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    url = args[0] if args else kwargs.get("url", "")
+    assert url.rstrip("/").endswith("/v3/mail/send"), f"must hit v3 endpoint, got {{url}}"
+
+    payload = kwargs.get("json") or kwargs.get("data") or {{}}
+    assert "personalizations" in payload, "v3 payload needs personalizations"
+    assert payload["personalizations"][0]["to"][0]["email"] == "user@example.com"
+    assert payload["subject"] == "Hello"
+    assert any(c["type"] == "text/plain" for c in payload["content"])
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
+# Plaid: /transactions/get -> /transactions/sync
+# ---------------------------------------------------------------------------
+
+_PLAID_GET_CALL_RE = re.compile(r"(\w+)\.Transactions\.get\s*\(")
+_PLAID_GET_URL_RE = re.compile(r"/transactions/get\b")
+
+
+def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a Plaid /transactions/get -> /transactions/sync migration."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="plaid-legacy-transactions")
+    new_source = original
+    count = 0
+
+    for m in reversed(list(_PLAID_GET_CALL_RE.finditer(new_source))):
+        obj = m.group(1)
+        open_idx = new_source.index("(", m.start())
+        arg_text, after = _extract_balanced_args(new_source, open_idx)
+        parts = _split_top_level_kwargs(arg_text)
+        access_token = parts[0] if parts else "access_token"
+        replacement = f"{obj}.transactions_sync({access_token}, cursor=cursor)"
+        new_source = new_source[:m.start()] + replacement + new_source[after:]
+        count += 1
+    if _PLAID_GET_URL_RE.search(new_source):
+        new_source = _PLAID_GET_URL_RE.sub("/transactions/sync", new_source)
+        count += 1
+
+    if count == 0:
+        draft.notes.append("no /transactions/get usage found — nothing to draft")
+        return draft
+
+    draft.notes.insert(0, f"rewrote {count} /transactions/get call(s) to /transactions/sync")
+    draft.notes.append("/transactions/sync is cursor-based, not date-range: initialize "
+                       "`cursor = None`, loop while `response['has_more']`, and persist "
+                       "`response['next_cursor']` between runs for incremental sync")
+    draft.notes.append("response shape differs — /transactions/get returns `transactions`; "
+                       "/transactions/sync returns `added` / `modified` / `removed`. "
+                       "Update downstream code accordingly")
+    draft.notes.append("date-range args (start_date/end_date) were dropped — sync covers "
+                       "the full available history on first run")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_plaid_contract_test(module: str, func_name: str = "sync_transactions") -> tuple[str, str]:
+    """Generate a pytest contract test sketch for the /transactions/sync migration."""
+    path = "tests/test_plaid_sync_contract.py"
+    content = f'''"""Contract test sketch for the Plaid /transactions/get -> /transactions/sync migration.
+
+Asserts the app drives the cursor-based sync endpoint and pages through
+`has_more`. Uses unittest.mock — no network calls.
+"""
+from unittest.mock import MagicMock, patch
+
+from {module} import {func_name}
+
+
+@patch("{module}.plaid_client")
+def test_plaid_sync_contract(mock_client):
+    mock_client.transactions_sync.side_effect = [
+        {{"added": [{{"transaction_id": "t1"}}], "has_more": True, "next_cursor": "c1"}},
+        {{"added": [], "has_more": False, "next_cursor": "c2"}},
+    ]
+
+    added = {func_name}("access-test-token")
+
+    assert mock_client.transactions_sync.called
+    # first call starts a fresh sync when no cursor is stored
+    _, kwargs = mock_client.transactions_sync.call_args_list[0]
+    assert kwargs.get("cursor") is None
+    assert added == [{{"transaction_id": "t1"}}]
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
+# Slack: RTM API -> Socket Mode
+# ---------------------------------------------------------------------------
+
+_RTM_IMPORT_RE = re.compile(r"from\s+slack\s+import\s+RTMClient")
+_RTM_CLIENT_RE = re.compile(r"(\w+)\s*=\s*RTMClient\(token\s*=\s*([^)]+)\)")
+_RTM_RUN_ON_RE = re.compile(r"@RTMClient\.run_on\(event\s*=\s*['\"]([^'\"]+)['\"]\)")
+
+
+def draft_slack_rtm_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
+    """Draft a Slack RTM -> Socket Mode migration for one Python file."""
+    repo = Path(repo_path)
+    full = repo / rel_path
+    original = full.read_text()
+    draft = FixDraft(entry_id="slack-rtm-api")
+    new_source = original
+    count = 0
+    old_var: str | None = None
+
+    if _RTM_IMPORT_RE.search(new_source):
+        new_source = _RTM_IMPORT_RE.sub(
+            "from slack_sdk import WebClient\n"
+            "from slack_sdk.socket_mode import SocketModeClient",
+            new_source)
+        count += 1
+    m = _RTM_CLIENT_RE.search(new_source)
+    if m:
+        old_var = m.group(1)
+        token = m.group(2).strip()
+        replacement = (
+            'socket_client = SocketModeClient(\n'
+            '    app_token="xapp-REPLACE-ME",  # TODO: Socket Mode needs an app-level token (xapp-...)\n'
+            f'    web_client=WebClient(token={token}),\n'
+            ')')
+        new_source = new_source[:m.start()] + replacement + new_source[m.end():]
+        count += 1
+        draft.notes.append("RTMClient(token=...) -> SocketModeClient(app_token=..., "
+                           "web_client=WebClient(token=...)): Socket Mode requires an "
+                           "app-level token (starts with xapp-), not a bot token")
+    for m in reversed(list(_RTM_RUN_ON_RE.finditer(new_source))):
+        event = m.group(1)
+        replacement = (
+            f"# TODO(socket-mode): RTM event '{event}' — register the handler below via\n"
+            f"# socket_client.socket_mode_request_listeners.append(<handler_function>)")
+        new_source = new_source[:m.start()] + replacement + new_source[m.end():]
+        count += 1
+        draft.notes.append(
+            f"@RTMClient.run_on(event='{event}') has no decorator equivalent — "
+            "append the handler to socket_client.socket_mode_request_listeners; "
+            "the handler signature becomes (client: SocketModeClient, req: SocketModeRequest)")
+    if old_var:
+        start_re = re.compile(rf"\b{re.escape(old_var)}\.start\(\)")
+        if start_re.search(new_source):
+            new_source = start_re.sub("socket_client.connect()", new_source)
+            count += 1
+
+    if count == 0:
+        draft.notes.append("no Slack RTM usage found — nothing to draft")
+        return draft
+    draft.notes.insert(0, f"rewrote {count} Slack RTM usage(s) to Socket Mode")
+    draft.notes.append("enable Socket Mode in your Slack app settings and generate an "
+                       "app-level token with the connections:write scope")
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_source.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    draft.changes.append(FileChange(path=rel_path, diff=diff, new_content=new_source))
+    return draft
+
+
+def generate_slack_contract_test(module: str = "app") -> tuple[str, str]:
+    """Generate a pytest contract test sketch for the Socket Mode migration."""
+    path = "tests/test_slack_socket_mode_contract.py"
+    content = f'''"""Contract test sketch for the Slack RTM -> Socket Mode migration.
+
+Asserts the app builds a SocketModeClient with an app-level token and a
+WebClient, registers a listener, and connects. Uses unittest.mock.
+"""
+from unittest.mock import patch
+
+
+@patch("{module}.SocketModeClient")
+@patch("{module}.WebClient")
+def test_socket_mode_contract(mock_web_client, mock_socket_client):
+    import {module} as app
+    import importlib
+    importlib.reload(app)
+
+    mock_socket_client.assert_called_once()
+    _, kwargs = mock_socket_client.call_args
+    assert kwargs["app_token"].startswith("xapp-"), "Socket Mode needs an app-level token"
+    assert "web_client" in kwargs
+    mock_socket_client.return_value.connect.assert_called()
+    assert mock_socket_client.return_value.socket_mode_request_listeners, \\
+        "at least one listener must be registered"
+'''
+    return path, content
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -234,6 +768,38 @@ def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
             test_path, test_content = generate_stripe_contract_test(
                 module=kwargs.get("module", "app"),
                 func_name=kwargs.get("func_name", "create_charge"))
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "twilio-authy-api":
+        draft = draft_twilio_authy_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_twilio_contract_test(
+                module=kwargs.get("module", "app"),
+                start_func=kwargs.get("start_func", "start_verification"),
+                check_func=kwargs.get("check_func", "check_verification"))
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "sendgrid-v2-api":
+        draft = draft_sendgrid_v2_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_sendgrid_contract_test(
+                module=kwargs.get("module", "app"),
+                func_name=kwargs.get("func_name", "send_email"))
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "plaid-legacy-transactions":
+        draft = draft_plaid_transactions_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_plaid_contract_test(
+                module=kwargs.get("module", "app"),
+                func_name=kwargs.get("func_name", "sync_transactions"))
+            draft.tests.append((test_path, test_content))
+        return draft
+    if entry_id == "slack-rtm-api":
+        draft = draft_slack_rtm_fix(repo_path, rel_path)
+        if not draft.empty():
+            test_path, test_content = generate_slack_contract_test(
+                module=kwargs.get("module", "app"))
             draft.tests.append((test_path, test_content))
         return draft
     raise KeyError(f"no fix drafter for entry '{entry_id}' (v2: add vendor fixer)")

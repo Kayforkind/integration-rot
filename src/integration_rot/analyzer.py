@@ -16,6 +16,10 @@ RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 def _parse_date(s: str | None) -> date | None:
     if not s:
         return None
+    s = s.strip()
+    # month-precision dates (e.g. "2023-04") are treated as the first of the month
+    if len(s) == 7 and s[4] == "-":
+        s += "-01"
     return date.fromisoformat(s)
 
 

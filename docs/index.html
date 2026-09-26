@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration-rot Autopilot — catch deprecated API usage before production does</title>
+<meta name="description" content="Agentic AI for engineering teams: monitors third-party API dependencies, detects deprecations and schema drift, drafts migration fixes with contract tests, and opens the PR.">
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg2: #11151f;
+    --bg3: #161c2a;
+    --line: #232b3d;
+    --txt: #e6e9f0;
+    --mut: #8b93a7;
+    --acc: #4ade80;
+    --acc2: #22d3ee;
+    --warn: #fbbf24;
+    --crit: #f87171;
+    --vio: #a78bfa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    line-height: 1.6; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--acc2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* nav */
+  nav { border-bottom: 1px solid var(--line); position: sticky; top: 0;
+        background: rgba(11,14,20,.92); backdrop-filter: blur(8px); z-index: 10; }
+  nav .wrap { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--txt); }
+  .logo svg { display: block; }
+  nav .links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; }
+  nav .links a { color: var(--mut); }
+  nav .links a:hover { color: var(--txt); text-decoration: none; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 8px;
+    font-weight: 600; font-size: 15px; border: 1px solid var(--line);
+    transition: transform .08s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn-primary { background: var(--acc); color: #06281a; border-color: var(--acc); }
+  .btn-ghost { color: var(--txt); background: var(--bg3); }
+  .btn-sm { padding: 7px 14px; font-size: 13px; }
+
+  /* hero */
+  .hero { padding: 84px 0 64px; text-align: center; }
+  .hero .kicker {
+    display: inline-block; font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--acc); border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 16px; margin-bottom: 24px; background: var(--bg2);
+  }
+  .hero h1 { font-size: clamp(34px, 5.4vw, 58px); line-height: 1.12; letter-spacing: -0.02em; }
+  .hero h1 .grad {
+    background: linear-gradient(90deg, var(--acc), var(--acc2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.sub { color: var(--mut); font-size: 19px; max-width: 680px; margin: 20px auto 32px; }
+  .hero .ctas { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
+  /* terminal */
+  .term {
+    background: #0a0d13; border: 1px solid var(--line); border-radius: 12px;
+    margin: 52px auto 0; max-width: 860px; text-align: left; overflow: hidden;
+    box-shadow: 0 24px 70px rgba(0,0,0,.5);
+  }
+  .term .bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+               background: var(--bg3); border-bottom: 1px solid var(--line); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term .bar .title { margin-left: 8px; font-size: 12.5px; color: var(--mut);
+                      font-family: ui-monospace, monospace; }
+  .term pre {
+    padding: 20px 22px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px; line-height: 1.65; overflow-x: auto; white-space: pre;
+  }
+  .c-prompt { color: var(--acc); } .c-dim { color: var(--mut); }
+  .c-crit { color: var(--crit); font-weight: 700; } .c-med { color: var(--warn); font-weight: 700; }
+  .c-add { color: var(--acc); } .c-del { color: var(--crit); }
+  .c-note { color: var(--vio); }
+
+  section { padding: 72px 0; }
+  section h2 { font-size: 32px; letter-spacing: -0.01em; margin-bottom: 12px; text-align: center; }
+  section .lede { color: var(--mut); text-align: center; max-width: 660px; margin: 0 auto 44px; font-size: 17px; }
+
+  /* problem cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 26px; }
+  .card h3 { font-size: 17px; margin-bottom: 8px; }
+  .card p { color: var(--mut); font-size: 14.5px; }
+  .card .icon { font-size: 26px; margin-bottom: 12px; display: block; }
+
+  /* stages */
+  .stage { margin-bottom: 56px; }
+  .stage:last-child { margin-bottom: 0; }
+  .stage-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .stage-num {
+    font-family: ui-monospace, monospace; color: var(--bg); background: var(--acc);
+    font-weight: 700; border-radius: 8px; padding: 2px 10px; font-size: 14px;
+  }
+  .stage-head h3 { font-size: 22px; }
+  .stage-head code { color: var(--mut); font-size: 13px; }
+  .stage p.desc { color: var(--mut); max-width: 720px; margin-bottom: 16px; }
+  .stage .term { margin: 0; max-width: none; }
+
+  /* features */
+  .feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+
+  /* coverage table */
+  .cov { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--bg2);
+         border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .cov th, .cov td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  .cov th { color: var(--mut); font-weight: 600; font-size: 12.5px; text-transform: uppercase;
+            letter-spacing: .06em; }
+  .cov tr:last-child td { border-bottom: none; }
+  .cov td.id { font-family: ui-monospace, monospace; font-size: 13px; color: var(--acc2); }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; border-radius: 999px;
+          padding: 2px 10px; }
+  .pill.fix { background: rgba(74,222,128,.14); color: var(--acc); border: 1px solid rgba(74,222,128,.35); }
+  .pill.no { background: rgba(139,147,167,.12); color: var(--mut); border: 1px solid var(--line); }
+
+  /* architecture */
+  .arch { background: var(--bg2); border: 1px solid var(--line); border-radius: 14px;
+          padding: 30px; overflow-x: auto; }
+  .arch svg { display: block; margin: 0 auto; min-width: 640px; max-width: 100%; }
+
+  /* roadmap */
+  .road { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .road .ver { font-family: ui-monospace, monospace; color: var(--acc2); font-weight: 700;
+               font-size: 14px; margin-bottom: 10px; display: block; }
+  .road ul { list-style: none; }
+  .road li { color: var(--mut); font-size: 14.5px; padding: 6px 0 6px 22px; position: relative; }
+  .road li::before { content: "→"; position: absolute; left: 0; color: var(--acc); }
+
+  /* quickstart */
+  .qs { background: var(--bg2); border: 1px solid var(--line); border-radius: 14px; padding: 34px; }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0; color: var(--mut);
+           font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 760px) {
+    .cards, .feats, .road { grid-template-columns: 1fr; }
+    nav .links { display: none; }
+    .term pre { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#" aria-label="integration-rot home">
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+        <rect x="1" y="1" width="24" height="24" rx="6" fill="#11151f" stroke="#4ade80" stroke-width="1.6"/>
+        <path d="M7 9l3.2 3.2L7 15.4" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="12" y1="16.5" x2="19" y2="16.5" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      integration-rot
+    </a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#coverage">Coverage</a>
+      <a href="#roadmap">Roadmap</a>
+    </div>
+    <a class="btn btn-ghost btn-sm" href="https://github.com/Kayforkind/integration-rot">View on GitHub</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hero">
+    <span class="kicker">v0.2.0 &mdash; now with auto-fixers, schema drift &amp; PR proposals</span>
+    <h1>Your APIs are rotting.<br><span class="grad">Catch it before production does.</span></h1>
+    <p class="sub">
+      Integration-rot scans your repos for deprecated third-party API usage,
+      drafts the migration with a contract test, and opens the pull request &mdash;
+      so a vendor sunset never becomes your 2&nbsp;a.m. incident.
+    </p>
+    <div class="ctas">
+      <a class="btn btn-primary" href="https://github.com/Kayforkind/integration-rot">View on GitHub</a>
+      <a class="btn btn-ghost" href="#quickstart">Quickstart</a>
+    </div>
+
+    <div class="term">
+      <div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">integration-rot check ./myapp</span></div>
+<pre><span class="c-prompt">$</span> integration-rot check ./myapp
+
+Integration-rot report for ./myapp
+  critical=1 high=0 medium=1 low=0
+
+  [<span class="c-crit">CRITICAL</span>] SendGrid: SendGrid v2 API sunset — migrate to v3 (sunset 2021-06-30)
+             - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
+             - app.py:28: `"https://api.sendgrid.com/v2/mail/send",` (matches sendgrid-v2-api)
+  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
+             - dependency `stripe` ^8.0.0 (npm, package.json)
+             - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)
+</pre>
+    </div>
+  </header>
+</div>
+
+<section id="problem">
+  <div class="wrap">
+    <h2>The problem: integration rot</h2>
+    <p class="lede">Every third-party API you ship against is a liability with a timer on it.
+      The blast radius hides across repos until a vendor flips the switch.</p>
+    <div class="cards">
+      <div class="card">
+        <span class="icon">🕵️</span>
+        <h3>Deprecations hide in plain sight</h3>
+        <p>Sunset notices live in changelogs nobody reads. The deprecated call sits in
+          <code>billing/worker.py</code> for two years &mdash; until it starts returning 410s.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🧩</span>
+        <h3>Migrations are toil, not engineering</h3>
+        <p>Each vendor migration is the same shape: find every call site, rewrite args,
+          prove the new contract. It's mechanical work that eats senior-engineer weeks.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🫥</span>
+        <h3>Silent drift breaks you first</h3>
+        <p>Vendors change fields and endpoints without a formal deprecation. Your
+          integration keeps "working" while the data it returns quietly changes shape.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="lede">Four stages, one pipeline. Every transcript below is real output
+      captured from running the tool &mdash; no mockups.</p>
+
+    <div class="stage">
+      <div class="stage-head"><span class="stage-num">01</span><h3>Scan</h3><code>integration-rot scan</code></div>
+      <p class="desc">Inventory every third-party dependency and find hardcoded vendor API
+        calls. Parses <code>package.json</code>, <code>requirements.txt</code>,
+        <code>go.mod</code>, <code>Gemfile</code> and <code>pom.xml</code>, maps
+        ~45 SDK packages to vendors, and heuristically spots vendor hostnames in source.</p>
+      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">scan</span></div>
+<pre><span class="c-prompt">$</span> integration-rot scan demo/sample-app
+Dependencies found in demo/sample-app:
+  npm      @sendgrid/mail ^6.5.0 [SendGrid]  (package.json)
+  npm      stripe ^8.0.0 [Stripe]  (package.json)
+  pypi     requests 2.28.0  (requirements.txt)
+  pypi     stripe 2.56.0 [Stripe]  (requirements.txt)
+
+Direct vendor API calls:
+  [SendGrid] app.py:28: "https://api.sendgrid.com/v2/mail/send",</pre>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-head"><span class="stage-num">02</span><h3>Match &amp; rank</h3><code>integration-rot check</code></div>
+      <p class="desc">Cross-reference the inventory against a curated knowledge base of
+        <strong>17 real deprecations</strong>. Risk is ranked by days-to-sunset and severity;
+        exit code 1 on critical/high &mdash; built for CI gates and Markdown/JSON reporting.</p>
+      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">check</span></div>
+<pre><span class="c-prompt">$</span> integration-rot check demo/sample-app
+
+Integration-rot report for demo/sample-app
+  critical=1 high=0 medium=1 low=0
+
+  [<span class="c-crit">CRITICAL</span>] SendGrid: SendGrid v2 API sunset — migrate to v3 (sunset 2021-06-30)
+             - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
+             - app.py:28: `"https://api.sendgrid.com/v2/mail/send",` (matches sendgrid-v2-api)
+  [<span class="c-med">MEDIUM  </span>] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
+             - dependency `stripe` ^8.0.0 (npm, package.json)
+             - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)</pre>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-head"><span class="stage-num">03</span><h3>Draft the fix</h3><code>integration-rot fix</code></div>
+      <p class="desc">Generate a real unified diff plus a contract test that proves the new
+        API contract. Five migration drafters ship today: Stripe Charges&rarr;PaymentIntents,
+        Twilio Authy&rarr;Verify v2, SendGrid v2&rarr;v3, Plaid
+        <code>/transactions/get</code>&rarr;<code>/transactions/sync</code>, Slack RTM&rarr;Socket Mode.</p>
+      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">fix</span></div>
+<pre><span class="c-prompt">$</span> integration-rot fix demo/sample-app --entry stripe-charges-api --file app.py
+<span class="c-del">--- a/app.py</span>
+<span class="c-add">+++ b/app.py</span>
+@@ -13,11 +13,13 @@
+
+ def create_charge(amount_cents, currency, token, description=""):
+     """Charge a card using the legacy Charges API (deprecated pattern)."""
+<span class="c-del">-    charge = stripe.Charge.create(</span>
+<span class="c-add">+    charge = stripe.PaymentIntent.create(</span>
+         amount=amount_cents,
+         currency=currency,
+<span class="c-del">-        source=token,</span>
+<span class="c-add">+        payment_method=token,</span>
+         description=description,
+<span class="c-add">+        confirm=True,</span>
+<span class="c-add">+        automatic_payment_methods={"enabled": True, "allow_redirects": "never"}</span>
+     )
+     return charge
+
+<span class="c-note">--- generated contract test: tests/test_stripe_payment_intent_contract.py ---</span>
+Notes:
+  - rewrote 1 stripe.Charge.create call(s) to stripe.PaymentIntent.create (SCA-ready)
+  - verify with stripe-mock or Stripe test clocks before merging</pre>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-head"><span class="stage-num">04</span><h3>Prove &amp; propose</h3><code>integration-rot drift</code> + <code>propose</code></div>
+      <p class="desc">Catch the changes vendors <em>don't</em> announce: diff a pinned OpenAPI
+        snapshot against the live spec. Then open the PR &mdash; risk finding, diff, contract
+        test and reviewer notes all attached.</p>
+      <div class="term"><div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">drift + propose</span></div>
+<pre><span class="c-prompt">$</span> integration-rot drift --vendor stripe --spec ./stripe-spec.json
+
+Schema drift for Stripe: Stripe: 1 endpoint(s) added, 0 removed, 1 changed
+
+  <span class="c-add">[ADDED]   POST /v1/terminal/readers</span>
+  <span class="c-med">[CHANGED] POST /v1/charges</span>
+            - request field `capture` removed
+            - response field `amount` type changed: integer -&gt; string
+
+<span class="c-prompt">$</span> <span class="c-dim">export GITHUB_TOKEN=ghp_...   # repo scope, read from env — never argv</span>
+<span class="c-prompt">$</span> integration-rot propose ./myrepo --entry stripe-charges-api --file app.py \
+      --owner myorg --repo-name myrepo --head fix/stripe-payment-intents
+Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What you get</h2>
+    <p class="lede">A complete loop from detection to merged PR &mdash; not another dashboard that just tells you you're doomed.</p>
+    <div class="feats">
+      <div class="card"><span class="icon">📚</span><h3>Curated deprecation DB</h3><p>17 real, sourced deprecations across 13 vendors. Every entry links its announcement &mdash; no invented sunsets.</p></div>
+      <div class="card"><span class="icon">🎯</span><h3>Risk-ranked findings</h3><p>Critical/high/medium/low by days-to-sunset and severity. Exit code 1 on serious findings &mdash; gate your CI.</p></div>
+      <div class="card"><span class="icon">🔧</span><h3>Migration drafters</h3><p>Real unified-diff patches for 5 migrations: Stripe, Twilio Verify, SendGrid v3, Plaid sync, Slack Socket Mode.</p></div>
+      <div class="card"><span class="icon">🧪</span><h3>Contract tests</h3><p>Every draft ships a pytest contract test asserting the new API's parameter contract. Proof, not vibes.</p></div>
+      <div class="card"><span class="icon">🔭</span><h3>Schema-drift detection</h3><p>Diff pinned OpenAPI snapshots against live vendor specs. Catches the changes nobody announced.</p></div>
+      <div class="card"><span class="icon">📬</span><h3>PR proposer</h3><p>Opens GitHub PRs carrying the risk report, diff, contract test and reviewer notes. Draft-PR mode included.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="coverage">
+  <div class="wrap">
+    <h2>Deprecation coverage</h2>
+    <p class="lede">The knowledge base today &mdash; each entry verified against its vendor announcement. Five ship with auto-fixers; the rest are detection-ready.</p>
+    <table class="cov">
+      <thead><tr><th>Vendor</th><th>Entry</th><th>Title</th><th>Auto-fix</th></tr></thead>
+      <tbody>
+        <tr><td>Stripe</td><td class="id">stripe-charges-api</td><td>Legacy Charges API → PaymentIntents (SCA-ready)</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>Stripe</td><td class="id">stripe-legacy-checkout</td><td>Legacy Checkout retired</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Twilio</td><td class="id">twilio-authy-api</td><td>Authy API end-of-life → Verify v2</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>Twilio</td><td class="id">twilio-fax-api</td><td>Programmable Fax deprecated</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Slack</td><td class="id">slack-rtm-api</td><td>RTM API deprecated → Socket Mode / Events API</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>SendGrid</td><td class="id">sendgrid-v2-api</td><td>v2 API sunset → v3</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>Plaid</td><td class="id">plaid-legacy-transactions</td><td>/transactions/get → /transactions/sync</td><td><span class="pill fix">fixer</span></td></tr>
+        <tr><td>Twitter</td><td class="id">twitter-free-api-retirement</td><td>Free API v1.1/v2 → paid Basic tier</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Reddit</td><td class="id">reddit-free-api-retirement</td><td>Free API → paid Data API</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Google</td><td class="id">google-plus-api-shutdown</td><td>Google+ API shutdown</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Google</td><td class="id">gcm-to-fcm</td><td>Google Cloud Messaging → Firebase Cloud Messaging</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Google</td><td class="id">google-signin-gsi</td><td>gapi.auth2 → Google Identity Services</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>LinkedIn</td><td class="id">linkedin-api-v1-v2</td><td>API v1 → v2</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Mailchimp</td><td class="id">mailchimp-api-2-retirement</td><td>API 2.0 / Export API 1.0 → API 3.0</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Instagram</td><td class="id">instagram-legacy-api-shutdown</td><td>Legacy API Platform shutdown</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>GitHub</td><td class="id">github-api-query-auth</td><td>Query-param auth → Authorization header</td><td><span class="pill no">detect</span></td></tr>
+        <tr><td>Salesforce</td><td class="id">salesforce-api-v21-v30</td><td>Platform API v21.0–v30.0 retirement</td><td><span class="pill no">detect</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <h2>Architecture</h2>
+    <p class="lede">Five modules, zero runtime dependencies. The fetcher abstraction means live vendor feeds plug in without touching the analyzer.</p>
+    <div class="arch">
+      <svg viewBox="0 0 720 200" width="720" height="200" font-family="ui-monospace, monospace" font-size="12">
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8" fill="none" stroke="#4ade80" stroke-width="1.5"/>
+          </marker>
+        </defs>
+        <!-- boxes -->
+        <g>
+          <rect x="8" y="60" width="118" height="80" rx="10" fill="#161c2a" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="67" y="92" fill="#e6e9f0" text-anchor="middle" font-weight="bold">SCANNER</text>
+          <text x="67" y="110" fill="#8b93a7" text-anchor="middle" font-size="10">manifests +</text>
+          <text x="67" y="124" fill="#8b93a7" text-anchor="middle" font-size="10">API-host heuristic</text>
+        </g>
+        <g>
+          <rect x="156" y="60" width="118" height="80" rx="10" fill="#161c2a" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="215" y="92" fill="#e6e9f0" text-anchor="middle" font-weight="bold">DEPRECATIONS</text>
+          <text x="215" y="110" fill="#8b93a7" text-anchor="middle" font-size="10">17 curated entries</text>
+          <text x="215" y="124" fill="#8b93a7" text-anchor="middle" font-size="10">+ feed fetchers</text>
+        </g>
+        <g>
+          <rect x="304" y="60" width="118" height="80" rx="10" fill="#161c2a" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="363" y="92" fill="#e6e9f0" text-anchor="middle" font-weight="bold">ANALYZER</text>
+          <text x="363" y="110" fill="#8b93a7" text-anchor="middle" font-size="10">match + rank risk</text>
+          <text x="363" y="124" fill="#8b93a7" text-anchor="middle" font-size="10">console/json/md</text>
+        </g>
+        <g>
+          <rect x="452" y="60" width="118" height="80" rx="10" fill="#161c2a" stroke="#4ade80" stroke-width="1.5"/>
+          <text x="511" y="92" fill="#e6e9f0" text-anchor="middle" font-weight="bold">FIXER</text>
+          <text x="511" y="110" fill="#8b93a7" text-anchor="middle" font-size="10">unified diff +</text>
+          <text x="511" y="124" fill="#8b93a7" text-anchor="middle" font-size="10">contract test</text>
+        </g>
+        <g>
+          <rect x="600" y="60" width="112" height="80" rx="10" fill="#161c2a" stroke="#4ade80" stroke-width="1.5"/>
+          <text x="656" y="92" fill="#e6e9f0" text-anchor="middle" font-weight="bold">PROPOSER</text>
+          <text x="656" y="110" fill="#8b93a7" text-anchor="middle" font-size="10">GitHub PR with</text>
+          <text x="656" y="124" fill="#8b93a7" text-anchor="middle" font-size="10">evidence</text>
+        </g>
+        <!-- arrows -->
+        <line x1="126" y1="100" x2="152" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="274" y1="100" x2="300" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="422" y1="100" x2="448" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="570" y1="100" x2="596" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr)"/>
+        <!-- drift box below -->
+        <g>
+          <rect x="304" y="160" width="118" height="34" rx="8" fill="#0a0d13" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="5,4"/>
+          <text x="363" y="182" fill="#a78bfa" text-anchor="middle" font-size="11">DRIFT · OpenAPI diffing</text>
+        </g>
+        <line x1="363" y1="140" x2="363" y2="158" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4,3"/>
+        <text x="363" y="30" fill="#8b93a7" text-anchor="middle" font-size="11">target repo in → ranked findings → patch → pull request</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <h2>Roadmap</h2>
+    <p class="lede">v0.2.0 is the working core. Next: live intelligence, deeper fixes, team workflow.</p>
+    <div class="road">
+      <div class="card">
+        <span class="ver">v0.3 — live intelligence</span>
+        <ul>
+          <li>Wire RSS / GitHub-release fetchers for Twilio, Slack, Stripe</li>
+          <li>Nightly snapshot refresh + per-vendor drift history</li>
+          <li>Drift against observed traffic, not just specs</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="ver">v0.4 — deeper fixes</span>
+        <ul>
+          <li>Fixers for the long tail (Twitter, Reddit, GitHub auth…)</li>
+          <li>Multi-file migrations, not just single-file</li>
+          <li>Run the contract test before proposing the PR</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="ver">v0.5 — team workflow</span>
+        <ul>
+          <li>GitHub App: install on an org, PRs on a schedule</li>
+          <li>Monorepo-aware scanning + SARIF output</li>
+          <li>Per-repo policy file (<code>rot.toml</code>)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>Quickstart</h2>
+    <p class="lede">Python ≥ 3.10, zero runtime dependencies. Sixty seconds to your first report.</p>
+    <div class="qs">
+      <div class="term" style="margin:0;max-width:none;box-shadow:none;">
+        <div class="bar"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#4ade80"></span><span class="title">quickstart</span></div>
+<pre><span class="c-prompt">$</span> git clone https://github.com/Kayforkind/integration-rot.git
+<span class="c-prompt">$</span> cd integration-rot &amp;&amp; python -m pip install -e ".[dev]"
+<span class="c-prompt">$</span> integration-rot demo          <span class="c-dim"># full pipeline on the bundled sample app</span>
+<span class="c-prompt">$</span> integration-rot check /path/to/your/repo</pre>
+      </div>
+      <div style="margin-top:22px;display:flex;gap:14px;flex-wrap:wrap;">
+        <a class="btn btn-primary" href="https://github.com/Kayforkind/integration-rot">Get the code</a>
+        <a class="btn btn-ghost" href="https://github.com/Kayforkind/integration-rot#cli-reference">Read the docs</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Integration-rot Autopilot — MIT © Kayforkind</span>
+    <span><a href="https://github.com/Kayforkind/integration-rot">GitHub</a> · <a href="https://github.com/Kayforkind/integration-rot#roadmap">Roadmap</a> · <a href="https://github.com/Kayforkind/integration-rot#contributing">Contributing</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

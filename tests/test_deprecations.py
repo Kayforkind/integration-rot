@@ -1,8 +1,7 @@
 """Tests for the deprecation DB and fetcher architecture."""
-from datetime import date
-
 import pytest
 
+from integration_rot.analyzer import _parse_date
 from integration_rot.deprecations import (
     GitHubReleasesFetcher,
     RSSChangelogFetcher,
@@ -19,9 +18,9 @@ def test_db_loads_and_validates():
     for e in entries:
         assert e.id and e.vendor and e.title and e.source_url.startswith("http")
         assert e.severity in ("breaking", "warning", "informational")
-        date.fromisoformat(e.announced)  # must parse
+        assert _parse_date(e.announced) is not None  # must parse (YYYY-MM allowed)
         if e.sunset:
-            date.fromisoformat(e.sunset)
+            assert _parse_date(e.sunset) is not None
 
 
 def test_static_fetcher_filters_vendor():
