@@ -1,0 +1,18 @@
+[project]
+name = "integration-rot"
+version = "0.1.0"
+description = "Integration-rot autopilot MVP: detect deprecated third-party API usage and draft fixes"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+integration-rot = "integration_rot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
