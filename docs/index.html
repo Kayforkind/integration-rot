@@ -174,7 +174,7 @@
 
 <div class="wrap">
   <header class="hero">
-    <span class="kicker">v0.3.1 &mdash; 8 auto-fixers, executed verification, drift history &amp; live feed scanning</span>
+    <span class="kicker">v0.4.0 &mdash; 8 auto-fixers, MCP server, REST API, agent loop, executed verification</span>
     <h1>Your APIs are rotting.<br><span class="grad">Catch it before production does.</span></h1>
     <p class="sub">
       Integration-rot scans your repos for deprecated third-party API usage,
@@ -376,6 +376,9 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
       <div class="card"><span class="icon">🧪</span><h3>Contract tests</h3><p>Every draft ships a pytest contract test asserting the new API's parameter contract. Proof, not vibes.</p></div>
       <div class="card"><span class="icon">🔭</span><h3>Schema-drift detection</h3><p>Diff pinned OpenAPI snapshots against live vendor specs — or keep a timestamped drift history. Catches the changes nobody announced.</p></div>
       <div class="card"><span class="icon">📬</span><h3>PR proposer</h3><p>Opens a GitHub PR from your already-pushed branch, carrying the risk report, diff and reviewer notes. Draft-PR mode included. (It doesn't run the contract test &mdash; <code>verify</code> does.)</p></div>
+      <div class="card"><span class="icon">🤖</span><h3>MCP server</h3><p><code>integration-rot mcp</code> exposes scan, check, draft-fix, DB lookup and the fixer catalog as Model Context Protocol tools over stdio — stdlib only, no <code>mcp</code> package. Point any MCP client at it.</p></div>
+      <div class="card"><span class="icon">🌐</span><h3>REST API</h3><p><code>integration-rot serve</code> serves a JSON API (stdlib <code>http.server</code>): <code>GET /health /deprecations /fixers</code>, <code>POST /scan /check /fix</code>. <code>/fix</code> drafts only — it never writes to disk.</p></div>
+      <div class="card"><span class="icon">🔁</span><h3>Agent loop</h3><p><code>integration-rot agent --path ./repo</code> runs scan → draft → sandbox-test → keep-or-revert on a temp copy of your repo. Your repo is never modified; you get a report with diffs to review. The planner is a deterministic risk-first policy — no LLM, no API key, works offline.</p></div>
     </div>
   </div>
 </section>
@@ -472,19 +475,19 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <section id="roadmap">
   <div class="wrap">
     <h2>Roadmap</h2>
-    <p class="lede">v0.3.1 is the working core — verified, not just drafted. Next: deeper fixes, team workflow, vendor partnerships.</p>
+    <p class="lede">v0.4.0 is the working core — verified, not just drafted. Next: deeper fixes, team workflow, vendor partnerships.</p>
     <div class="road">
       <div class="card">
-        <span class="ver">v0.3 — shipped ✓</span>
+        <span class="ver">v0.4 — shipped ✓</span>
         <ul>
-          <li>RSS/Atom changelog scanning with deprecation-signal matching</li>
-          <li>Timestamped OpenAPI snapshot history + CI-friendly drift exit codes</li>
+          <li>MCP server, REST API, and autonomous agent loop (deterministic planner)</li>
+          <li><code>pip install</code> entry point: a real <code>integration-rot</code> command</li>
           <li>Executed verification: run contract tests in an isolated sandbox</li>
-          <li>3 new fixers: GitHub query-auth, Salesforce versions, Mailchimp v2</li>
+          <li>8 migration fixers, 17-entry sourced deprecation DB</li>
         </ul>
       </div>
       <div class="card">
-        <span class="ver">v0.4 — deeper fixes</span>
+        <span class="ver">v0.5 — deeper fixes</span>
         <ul>
           <li>Fixers for the long tail (Twitter, Reddit, more auth migrations)</li>
           <li>Multi-file migrations, not just single-file</li>
@@ -493,7 +496,7 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
         </ul>
       </div>
       <div class="card">
-        <span class="ver">v0.5 — team workflow</span>
+        <span class="ver">v0.6 — team workflow</span>
         <ul>
           <li>GitHub App: install on an org, PRs on a schedule</li>
           <li>Monorepo-aware scanning + SARIF output</li>
@@ -514,7 +517,8 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
 <pre><span class="c-prompt">$</span> git clone https://github.com/Kayforkind/integration-rot.git
 <span class="c-prompt">$</span> cd integration-rot &amp;&amp; python -m pip install -e ".[dev]"
 <span class="c-prompt">$</span> integration-rot demo          <span class="c-dim"># full pipeline on the bundled sample app</span>
-<span class="c-prompt">$</span> integration-rot check /path/to/your/repo</pre>
+<span class="c-prompt">$</span> integration-rot check /path/to/your/repo
+<span class="c-prompt">$</span> integration-rot agent --path /path/to/your/repo   <span class="c-dim"># autonomous fix loop on a temp copy</span></pre>
       </div>
       <div style="margin-top:22px;display:flex;gap:14px;flex-wrap:wrap;">
         <a class="btn btn-primary" href="https://github.com/Kayforkind/integration-rot">Get the code</a>

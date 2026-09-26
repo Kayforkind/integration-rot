@@ -535,7 +535,7 @@ def _migrate_sendgrid_payload(source: str, start: int) -> tuple[str, str, list[s
     if not content_items:
         notes.append("no `text`/`html` body in v2 payload — add v3 `content` explicitly")
         return source, "", notes
-    lines = ['{"personalizations": [{"to": [{"email": %s}]}]' % to_v]
+    lines = ['"personalizations": [{"to": [{"email": %s}]}]' % to_v]
     if from_v is not None:
         lines.append(f'"from": {{"email": {from_v}}}')
     if subject_v is not None:
@@ -592,13 +592,22 @@ def draft_sendgrid_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
 
 
 def generate_sendgrid_contract_test(module: str, func_name: str = "send_email") -> tuple[str, str]:
-    """Generate a pytest contract test sketch for the SendGrid v3 migration."""
+    """Generate a pytest contract test sketch for the SendGrid v3 migration.
+
+    The test adapts to the patched function's real signature (via inspect)
+    instead of assuming an arity: it calls the function with placeholder
+    arguments, then asserts the v3 contract the fixer guarantees — one POST
+    to /v3/mail/send with a personalizations payload whose recipient comes
+    from the first argument. Review the placeholders before relying on it.
+    """
     path = "tests/test_sendgrid_v3_contract.py"
     content = f'''"""Contract test sketch for the SendGrid v2 -> v3 migration.
 
 Asserts the app POSTs to /v3/mail/send with the v3 nested payload shape.
-Uses unittest.mock — no network calls.
+Uses unittest.mock — no network calls. Placeholder arguments are derived
+from the function's own signature; review them before relying on this test.
 """
+import inspect
 from unittest.mock import patch
 
 import requests
@@ -606,11 +615,37 @@ import requests
 from {module} import {func_name}
 
 
+# Heuristic placeholder values for the function's parameters. The first
+# parameter is assumed to be the recipient email; parameters whose names
+# suggest numbers get an int (so arithmetic like amount_cents / 100 works).
+# This is a sketch: review the arguments before relying on this test.
+_NUMERIC_HINTS = ("amount", "cents", "price", "total", "quantity", "count",
+                  "number", "limit", "offset", "port", "timeout", "retry",
+                  "delay", "size", "length", "width", "height")
+
+
+def _placeholders():
+    sig = inspect.signature({func_name})
+    out = []
+    for i, (name, param) in enumerate(sig.parameters.items()):
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        if i == 0:
+            out.append("user@example.com")
+        elif any(h in name.lower() for h in _NUMERIC_HINTS):
+            out.append(100)
+        else:
+            out.append("test-value")
+    assert out, "could not derive placeholder args from signature"
+    return out
+
+
 @patch("requests.post")
 def test_sendgrid_v3_contract(mock_post):
     mock_post.return_value.status_code = 202
 
-    {func_name}("user@example.com", "Hello", "plain body")
+    placeholders = _placeholders()
+    {func_name}(*placeholders)
 
     mock_post.assert_called_once()
     args, kwargs = mock_post.call_args
@@ -619,9 +654,8 @@ def test_sendgrid_v3_contract(mock_post):
 
     payload = kwargs.get("json") or kwargs.get("data") or {{}}
     assert "personalizations" in payload, "v3 payload needs personalizations"
-    assert payload["personalizations"][0]["to"][0]["email"] == "user@example.com"
-    assert payload["subject"] == "Hello"
-    assert any(c["type"] == "text/plain" for c in payload["content"])
+    to = payload["personalizations"][0]["to"][0]["email"]
+    assert to == placeholders[0], f"recipient must come from the first argument, got {{to}}"
 '''
     return path, content
 

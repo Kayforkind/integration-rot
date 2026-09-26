@@ -1,4 +1,4 @@
-"""CLI: integration-rot scan | check | fix | verify | drift | snapshot | fetch | propose | demo"""
+"""CLI: integration-rot scan | check | fix | verify | drift | snapshot | fetch | propose | demo | mcp | serve | agent"""
 from __future__ import annotations
 
 import argparse
@@ -9,9 +9,12 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__
+from .agent import cmd_agent
 from .analyzer import analyze, print_console, to_json, to_markdown
+from .api_server import serve_forever
 from .deprecations import draft_entries_from_feed, fetch_all, load_db
 from .fixer import draft_fix, write_fix
+from .mcp_server import serve_stdio
 from .proposer import build_pr_body, open_pr
 from .scanner import scan_repo
 from .schema_drift import check_drift, check_drift_history, print_diff
@@ -217,6 +220,14 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_mcp(args) -> int:
+    return serve_stdio()
+
+
+def cmd_serve(args) -> int:
+    return serve_forever(port=args.port, host=args.host)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="integration-rot",
@@ -306,6 +317,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("demo", help="run the full pipeline on the bundled sample app")
     d.set_defaults(fn=cmd_demo)
+
+    m = sub.add_parser("mcp", help="start the MCP server on stdio "
+                                   "(for AI assistants / MCP clients)")
+    m.set_defaults(fn=cmd_mcp)
+
+    sv = sub.add_parser("serve", help="start the JSON REST API server")
+    sv.add_argument("--port", type=int, default=8000, help="port (default: 8000)")
+    sv.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default: 127.0.0.1)")
+    sv.set_defaults(fn=cmd_serve)
+
+    a = sub.add_parser("agent",
+                       help="autonomous migrate loop: scan -> draft -> "
+                            "verify -> keep-or-revert, on a temp copy "
+                            "(never modifies your repo in place)")
+    a.add_argument("--path", required=True, help="path to the target repo")
+    a.add_argument("--max-iterations", type=int, default=5,
+                   help="max fix attempts (default: 5)")
+    a.add_argument("--today", default=None,
+                   help="override date YYYY-MM-DD (for tests/demo)")
+    a.add_argument("--planner-endpoint", default=None,
+                   help="experimental: OpenAI-compatible chat-completions "
+                        "base URL for ordering findings; falls back to the "
+                        "built-in deterministic planner on any failure")
+    a.add_argument("--format", choices=["console", "json"], default="console")
+    a.set_defaults(fn=cmd_agent)
     return p
 
 

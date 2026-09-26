@@ -26,6 +26,7 @@ pull request for you.
 - [End-to-end worked example](#end-to-end-worked-example)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
+- [New in v0.4: MCP server, REST API, agent loop](#new-in-v04-mcp-server-rest-api-agent-loop)
 - [CLI reference](#cli-reference)
 - [The deprecation database](#the-deprecation-database)
 - [Writing a fixer](#writing-a-fixer)
@@ -244,7 +245,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.3.0
+integration-rot --version   # integration-rot 0.4.0
 ```
 
 ---
@@ -285,6 +286,85 @@ export GITHUB_TOKEN=ghp_...
 integration-rot propose /path/to/repo --entry stripe-charges-api --file app.py \
     --owner myorg --repo-name myrepo --head fix/stripe-charges
 ```
+
+---
+
+## New in v0.4: MCP server, REST API, agent loop
+
+Three new surfaces on top of the same scanner/analyzer/fixer core. All
+stdlib-only — no new dependencies.
+
+### MCP server (`integration-rot mcp`)
+
+A Model Context Protocol server over stdio (hand-rolled JSON-RPC framing,
+Content-Length headers — the `mcp` package is deliberately *not* a
+dependency). Tools: `scan_repo`, `check_findings`, `draft_fix`,
+`lookup_deprecation`, `get_fixers`. Real session:
+
+```text
+$ integration-rot mcp   # then: initialize
+< serverInfo: {'name': 'integration-rot', 'version': '0.4.0'} | protocol: 2025-06-18
+$ tools/list
+< tools: ['scan_repo', 'check_findings', 'draft_fix', 'lookup_deprecation', 'get_fixers']
+$ tools/call get_fixers
+< count: 8 | first: stripe-charges-api -> stripe.Charge.create(...) -> stripe.PaymentIntent.create(...
+```
+
+Point any MCP client at `integration-rot mcp` on stdio.
+
+### REST API (`integration-rot serve`)
+
+`GET /health`, `GET /deprecations`, `GET /fixers`,
+`POST /scan`, `POST /check`, `POST /fix`. JSON everywhere, proper status
+codes (`POST /fix` drafts only — it never writes to disk). Real session:
+
+```text
+$ integration-rot serve --port 8471 &
+$ curl -s localhost:8471/health
+{"status": "ok", "version": "0.4.0"}
+$ curl -s -X POST localhost:8471/check -d {"path":"demo/sample-app","today":"2026-09-26"}
+counts: {'critical': 0, 'high': 0, 'medium': 2, 'low': 0} | would_exit: 0 | findings: ['sendgrid-v2-api', 'stripe-charges-api']
+$ curl -s localhost:8471/fixers
+fixers: 8
+```
+
+### Agent loop (`integration-rot agent`)
+
+An autonomous migrate loop: scan → rank by risk → draft a fix for the top
+finding → apply to a **temp working copy** → run the contract tests in an
+isolated sandbox → keep the fix only if tests pass, else revert and record
+why. Your repo is never modified in place; the report ends with unified
+diffs for you to review and apply. Real run:
+
+```text
+$ integration-rot agent --path /tmp/agent-demo --max-iterations 5 --today 2026-09-26
+[iter 1] top finding: sendgrid-v2-api (medium) in app.py
+[iter 1] KEPT sendgrid-v2-api: tests passed
+[iter 2] top finding: stripe-charges-api (medium) in app.py
+[iter 2] KEPT stripe-charges-api: tests passed
+[iter 3] no actionable findings remain — stopping.
+
+=== integration-rot agent report (/tmp/agent-demo) ===
+planner: heuristic | iterations: 2
+fixed (2): sendgrid-v2-api, stripe-charges-api
+remaining findings (2):
+  - sendgrid-v2-api [medium] (fix_available=True)
+  - stripe-charges-api [medium] (fix_available=True)
+```
+
+The two "remaining" findings are dependency-level residuals (old SDKs still
+pinned in `requirements.txt`) with no deprecated code left to patch — the
+report says so explicitly. Exit code mirrors `check`: 0 when no
+critical/high risk remains.
+
+**About the planner:** the default planner is a deterministic policy loop —
+sort by risk (critical > high > medium > low), prefer findings a fixer
+exists for, tie-break by entry id. There is no LLM and no "AI reasoning" on
+the default path, and none is claimed. `--planner-endpoint` accepts an
+experimental OpenAI-compatible chat-completions URL for ordering findings,
+but on any failure (no network, bad response) it falls back to the
+deterministic planner and logs the fallback. The default path works fully
+offline.
 
 ---
 
@@ -831,12 +911,16 @@ summary for reviewers.
 integration-rot/
 ├── src/integration_rot/
 │   ├── __init__.py        version
-│   ├── cli.py             scan | check | fix | drift | propose | demo
+│   ├── cli.py             scan | check | fix | drift | propose | demo | mcp | serve | agent
 │   ├── scanner.py         manifest parsing, vendor mapping, API-host heuristic
 │   ├── vendor_map.py      64 SDK packages + 13 API hostnames -> canonical vendors
 │   ├── deprecations.py    DB loader + FeedFetcher architecture (live feeds plug in here)
 │   ├── analyzer.py        matching, risk ranking, console/JSON/Markdown renderers
 │   ├── fixer.py           8 migration drafters + contract-test generators + registry
+│   ├── verifier.py        sandbox fix application + pytest contract-test runner
+│   ├── mcp_server.py      MCP server over stdio (stdlib JSON-RPC framing)
+│   ├── api_server.py      JSON REST API (stdlib http.server)
+│   ├── agent.py           autonomous scan→draft→verify→keep-or-revert loop
 │   ├── schema_drift.py    OpenAPI snapshot diffing (endpoints / params / fields)
 │   ├── proposer.py        GitHub PR creation via REST (urllib only)
 │   └── models.py          shared dataclasses
@@ -846,7 +930,7 @@ integration-rot/
 │       └── stripe.json            pinned Stripe excerpt (4 endpoints, real fields)
 ├── demo/
 │   └── sample-app/                intentionally-outdated demo target
-├── tests/                         pytest suite (83 tests)
+├── tests/                         pytest suite (113 tests)
 ├── docs/
 │   └── index.html                 project landing page (GitHub Pages)
 ├── demo.sh                        one-command demo
@@ -855,19 +939,52 @@ integration-rot/
 
 ---
 
+## Capabilities and limitations (read this before relying on v0.4)
+
+**What v0.4 genuinely does:**
+- `mcp`, `serve`, and `agent` are real, tested surfaces (30 new tests) over
+  the existing scanner/analyzer/fixer core — no new runtime dependencies.
+- The agent loop really does scan → draft → sandbox-test → keep-or-revert,
+  and it really does leave your repo untouched (verified by test: byte-for-byte
+  snapshot comparison before/after).
+- The agent caught a real defect during development: the SendGrid fixer was
+  emitting syntactically invalid Python (a mis-nested `personalizations`
+  dict), and its contract test assumed a wrong function arity. Both are fixed
+  in v0.4.0 — which is exactly what the keep-or-revert loop is for.
+
+**What it does not do:**
+- The agent fixes one file per finding per iteration, chosen by a fixed
+  risk-first policy. It does not understand your codebase, plan multi-file
+  migrations, or learn from failures beyond "don't retry this entry."
+- `--planner-endpoint` is an experimental stub, not an integration. Expect
+  the heuristic path in practice.
+- `POST /fix` and the MCP `draft_fix` tool draft patches; they do not apply
+  them. Only `fix --apply` and the agent's temp working copy write files.
+- The MCP server speaks MCP over stdio, but it has not been tested against
+  every MCP client — only against a scripted JSON-RPC session (see tests).
+- Contract tests are `unittest.mock` sketches of the vendor contract, not
+  proof against the live API. A kept fix means "the draft is syntactically
+  valid and satisfies its own sketch," not "the migration is correct in
+  production." Review every diff.
+
+---
+
 ## Roadmap
 
-**v0.3 — live intelligence**
+**v0.4 — shipped:** MCP server, REST API, autonomous agent loop (deterministic
+planner), `pip install` entry point, SendGrid fixer/test correctness fixes.
+
+**v0.5 — live intelligence**
 - Wire `RSSChangelogFetcher` / `GitHubReleasesFetcher` for Twilio, Slack, Stripe
 - Nightly snapshot refresh + drift history (what changed, when, per vendor)
 - Response-schema drift against *observed* traffic, not just specs
 
-**v0.4 — deeper fixes**
+**v0.5 — deeper fixes**
 - Fixers for the long tail of the DB (Twitter, Reddit, more auth migrations, …)
 - Multi-file migrations (a deprecation rarely lives in one file)
 - Fix verification: run the contract test *before* proposing the PR
 
-**v0.5 — team workflow**
+**v0.6 — team workflow**
 - GitHub App: install on an org, get PRs on a schedule, no CLI needed
 - Monorepo-aware scanning, SARIF output for code-scanning dashboards
 - Ignore-files and per-repo policy (`rot.toml`)
