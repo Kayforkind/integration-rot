@@ -49,6 +49,12 @@ FIXER_CATALOG = [
 ]
 
 
+def _target_path(args: dict) -> str | None:
+    """The target repo location. `path` is canonical; `repo` is accepted as
+    an alias so CLI users (`check <repo>`) don't have to relearn the key."""
+    return args.get("path") or args.get("repo")
+
+
 def _finding_to_dict(f) -> dict:
     return {
         "entry_id": f.entry.id,
@@ -66,7 +72,7 @@ def _finding_to_dict(f) -> dict:
 
 
 def tool_scan_repo(args: dict) -> dict:
-    path = args.get("path")
+    path = _target_path(args)
     if not path:
         raise ValueError("missing required argument: path")
     scan = scan_repo(path)
@@ -88,7 +94,7 @@ def tool_scan_repo(args: dict) -> dict:
 
 
 def tool_check_findings(args: dict) -> dict:
-    path = args.get("path")
+    path = _target_path(args)
     if not path:
         raise ValueError("missing required argument: path")
     today = date.fromisoformat(args["today"]) if args.get("today") else None
@@ -109,7 +115,7 @@ def tool_check_findings(args: dict) -> dict:
 
 def tool_draft_fix(args: dict) -> dict:
     entry_id = args.get("entry_id")
-    path = args.get("path")
+    path = _target_path(args)
     rel_file = args.get("file")
     missing = [k for k, v in (("entry_id", entry_id), ("path", path),
                               ("file", rel_file)) if not v]
@@ -169,7 +175,7 @@ TOOLS = {
                   "vendor API calls.",
                   {"type": "object",
                    "properties": {"path": {"type": "string",
-                                           "description": "path to the target repo"}},
+                                           "description": "path to the target repo (`repo` accepted as alias)"}},
                    "required": ["path"]}),
     "check_findings": (tool_check_findings,
                        "Analyze a repo against the deprecation DB; returns "
@@ -189,7 +195,7 @@ TOOLS = {
                    "properties": {
                        "entry_id": {"type": "string"},
                        "path": {"type": "string",
-                                "description": "path to the target repo"},
+                                "description": "path to the target repo (`repo` accepted as alias)"},
                        "file": {"type": "string",
                                 "description": "repo-relative source file to patch"},
                        "module": {"type": "string", "default": "app"},

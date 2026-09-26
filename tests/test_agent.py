@@ -29,6 +29,9 @@ def test_agent_fixes_sample_app(tmp_path):
     remaining_ids = {f["entry_id"] for f in report.remaining}
     assert remaining_ids == {"stripe-charges-api", "sendgrid-v2-api"}
     assert {f["risk"] for f in report.remaining} == {"medium"}
+    # kept fixes must be flagged as code-migrated (old SDK pin residual),
+    # never presented as unaddressed findings for the same id
+    assert all(f["code_migrated"] for f in report.remaining)
     assert report.diffs, "expected diffs for the kept fixes"
     # the user's repo is never modified in place
     assert _snapshot(repo) == before
@@ -118,3 +121,4 @@ def test_agent_planner_endpoint_falls_back(tmp_path):
                        verbose=False)
     assert report.planner in ("heuristic", "heuristic+fallback")
     assert report.remaining == []
+

@@ -373,11 +373,16 @@ def run_agent(repo: str | Path, max_iterations: int = 5,
                 print(f"hit --max-iterations ({max_iterations}); stopping.")
 
         # remaining findings, recomputed against the FULL db on the final
-        # working copy — this is the honest end state, including residuals
+        # working copy — this is the honest end state, including residuals.
+        # Entries whose code was migrated by a kept fix are flagged: the
+        # deprecated *code* is gone, but the old SDK pin can still match the
+        # entry's package criteria (a dependency-level residual, not unmigrated
+        # code).
         final = analyze(scan_repo(workdir), all_entries, today=today).findings
         report.remaining = [{
             "entry_id": f.entry.id, "vendor": f.entry.vendor,
             "risk": f.risk, "fix_available": f.entry.fix_available,
+            "code_migrated": f.entry.id in settled,
         } for f in final]
         report.diffs = _unified_diffs(repo, workdir, changed_paths)
         for note in planner_notes:
@@ -399,12 +404,20 @@ def print_report(report: AgentReport) -> None:
         print(f"no fixer / no code location ({len(report.unfixable)}):")
         for e, r in report.unfixable:
             print(f"  - {e}: {r}")
-    if report.remaining:
-        print(f"remaining findings ({len(report.remaining)}):")
-        for f in report.remaining:
+    migrated = [f for f in report.remaining if f.get("code_migrated")]
+    unaddressed = [f for f in report.remaining if not f.get("code_migrated")]
+    if migrated:
+        print(f"code migrated — dependency pin still old ({len(migrated)}):")
+        for f in migrated:
+            print(f"  - {f['entry_id']} [{f['risk']}]")
+        print("  (deprecated code was rewritten and contract-tested; the manifest")
+        print("   still pins the old SDK — bump the dependency to close this.)")
+    if unaddressed:
+        print(f"remaining findings ({len(unaddressed)}):")
+        for f in unaddressed:
             print(f"  - {f['entry_id']} [{f['risk']}] "
                   f"(fix_available={f['fix_available']})")
-    else:
+    if not report.remaining:
         print("remaining findings: none")
     if report.diffs:
         print("\n--- diffs vs your repo (NOT applied; review and apply manually) ---")

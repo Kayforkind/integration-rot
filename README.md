@@ -89,7 +89,7 @@ Direct vendor API calls:
 ```
 
 The scanner parses `package.json` (+ lockfiles), `requirements.txt`, `go.mod`,
-`Gemfile`, and `pom.xml`, maps 64 SDK packages to vendors (plus 13 API
+`Gemfile`, and `pom.xml`, maps 76 SDK packages to vendors (plus 13 API
 hostnames), and heuristically
 spots hardcoded vendor hostnames in source.
 
@@ -103,10 +103,10 @@ $ integration-rot check demo/sample-app
 Integration-rot report for demo/sample-app
   critical=0 high=0 medium=2 low=0
 
-  [MEDIUM  ] SendGrid: SendGrid v2 API deprecated — migrate to v3 (no sunset published) (no sunset date)
+  [MEDIUM  ] SendGrid: SendGrid v2 API deprecated — migrate to v3 (no sunset published) (no sunset date) [auto-fix available]
              - dependency `@sendgrid/mail` ^6.5.0 (npm, package.json)
              - app.py:28: `"https://api.sendgrid.com/api/mail.send.json",` (matches sendgrid-v2-api)
-  [MEDIUM  ] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date)
+  [MEDIUM  ] Stripe: Legacy Charges API superseded by PaymentIntents (SCA-ready) (no sunset date) [auto-fix available]
              - dependency `stripe` ^8.0.0 (npm, package.json)
              - app.py:16: `charge = stripe.Charge.create(` (matches stripe-charges-api)
 ```
@@ -248,7 +248,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.4.3
+integration-rot --version   # integration-rot 0.4.4
 ```
 
 ---
@@ -306,7 +306,7 @@ dependency). Tools: `scan_repo`, `check_findings`, `draft_fix`,
 
 ```text
 $ integration-rot mcp   # then: initialize
-< serverInfo: {'name': 'integration-rot', 'version': '0.4.3'} | protocol: 2025-06-18
+< serverInfo: {'name': 'integration-rot', 'version': '0.4.4'} | protocol: 2025-06-18
 $ tools/list
 < tools: ['scan_repo', 'check_findings', 'draft_fix', 'lookup_deprecation', 'get_fixers']
 $ tools/call get_fixers
@@ -324,7 +324,7 @@ codes (`POST /fix` drafts only — it never writes to disk). Real session:
 ```text
 $ integration-rot serve --port 8471 &
 $ curl -s localhost:8471/health
-{"status": "ok", "version": "0.4.3"}
+{"status": "ok", "version": "0.4.4"}
 $ curl -s -X POST localhost:8471/check -d {"path":"demo/sample-app","today":"2026-09-26"}
 counts: {'critical': 0, 'high': 0, 'medium': 2, 'low': 0} | would_exit: 0 | findings: ['sendgrid-v2-api', 'stripe-charges-api']
 $ curl -s localhost:8471/fixers
@@ -350,9 +350,11 @@ $ integration-rot agent --path /tmp/agent-demo --max-iterations 5 --today 2026-0
 === integration-rot agent report (/tmp/agent-demo) ===
 planner: heuristic | iterations: 2
 fixed (2): sendgrid-v2-api, stripe-charges-api
-remaining findings (2):
-  - sendgrid-v2-api [medium] (fix_available=True)
-  - stripe-charges-api [medium] (fix_available=True)
+code migrated — dependency pin still old (2):
+  - sendgrid-v2-api [medium]
+  - stripe-charges-api [medium]
+  (deprecated code was rewritten and contract-tested; the manifest
+   still pins the old SDK — bump the dependency to close this.)
 ```
 
 The two "remaining" findings are dependency-level residuals (old SDKs still
@@ -916,7 +918,7 @@ integration-rot/
 │   ├── __init__.py        version
 │   ├── cli.py             scan | check | fix | drift | propose | demo | mcp | serve | agent
 │   ├── scanner.py         manifest parsing, vendor mapping, API-host heuristic
-│   ├── vendor_map.py      64 SDK packages + 13 API hostnames -> canonical vendors
+│   ├── vendor_map.py      76 SDK packages + 13 API hostnames -> canonical vendors
 │   ├── deprecations.py    DB loader + FeedFetcher architecture (live feeds plug in here)
 │   ├── analyzer.py        matching, risk ranking, console/JSON/Markdown renderers
 │   ├── fixer.py           8 migration drafters + contract-test generators + registry
@@ -933,7 +935,7 @@ integration-rot/
 │       └── stripe.json            pinned Stripe excerpt (4 endpoints, real fields)
 ├── demo/
 │   └── sample-app/                intentionally-outdated demo target
-├── tests/                         pytest suite (129 tests)
+├── tests/                         pytest suite (131 tests)
 ├── docs/
 │   └── index.html                 project landing page (GitHub Pages)
 ├── demo.sh                        one-command demo
@@ -972,6 +974,21 @@ integration-rot/
 
 **v0.4.2 — detection + fixer depth + console honesty (126 tests):**
 **v0.4.3 — Windows/locale encoding, entry-id honesty, vendor map (129 tests):**
+**v0.4.4 — final review pass, UX honesty (131 tests):**
+- Vendor map grew to 76 packages in v0.4.3 but the README/page still said 64 —
+  all counts (76 packages, 13 hostnames, 13 modules, 17 entries, 8 fixers)
+  re-verified against the code in this pass.
+- Agent report no longer contradicts itself: entries whose code was migrated by
+  a kept fix but whose old SDK pin still matches are reported as
+  "code migrated — dependency pin still old" instead of "remaining findings".
+- REST API and MCP tools accept `repo` as an alias for `path`, so CLI users
+  (`check <repo>`) don't hit a different convention when scripting across
+  surfaces. Schemas document the alias.
+- `demo.sh` prefers the installed `integration-rot` entry point over
+  `python3 -m integration_rot.cli`.
+- README transcripts refreshed (check `[auto-fix available]`, new agent
+  report wording).
+
 - Every file read/write in the package now passes `encoding="utf-8"` explicitly —
   generated contract tests no longer land in the ANSI code page on Windows, and
   deprecation DB titles no longer come back mojibake under non-UTF-8 locales.

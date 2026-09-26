@@ -9,6 +9,9 @@ Endpoints:
     POST /fix           -> {"entry_id"|"finding_id", "path", "file", ...}
                            drafts a fix (dry-run: writes nothing to disk)
 
+`path` is the canonical key; `repo` is accepted as an alias everywhere a
+target repo is required (matching the CLI's positional `repo` argument).
+
 All responses are JSON. Errors are JSON {"error": ...} with proper status
 codes. The server binds localhost by default.
 
@@ -30,6 +33,12 @@ from .mcp_server import FIXER_CATALOG, _finding_to_dict
 from .scanner import scan_repo
 
 
+def _target_path(body: dict) -> str | None:
+    """The target repo location. `path` is canonical; `repo` is accepted as
+    an alias so CLI users (`check <repo>`) don't have to relearn the key."""
+    return body.get("path") or body.get("repo")
+
+
 def _entry_to_dict(e) -> dict:
     return {
         "id": e.id, "vendor": e.vendor, "title": e.title,
@@ -41,7 +50,7 @@ def _entry_to_dict(e) -> dict:
 
 
 def api_scan(body: dict) -> tuple[int, dict]:
-    path = body.get("path")
+    path = _target_path(body)
     if not path:
         return 400, {"error": "missing required field: path"}
     try:
@@ -61,7 +70,7 @@ def api_scan(body: dict) -> tuple[int, dict]:
 
 
 def api_check(body: dict) -> tuple[int, dict]:
-    path = body.get("path")
+    path = _target_path(body)
     if not path:
         return 400, {"error": "missing required field: path"}
     today = date.fromisoformat(body["today"]) if body.get("today") else None
@@ -85,7 +94,7 @@ def api_check(body: dict) -> tuple[int, dict]:
 def api_fix(body: dict) -> tuple[int, dict]:
     # `finding_id` is accepted as an alias for `entry_id`.
     entry_id = body.get("entry_id") or body.get("finding_id")
-    path = body.get("path")
+    path = _target_path(body)
     rel_file = body.get("file")
     missing = [k for k, v in (("entry_id", entry_id), ("path", path),
                               ("file", rel_file)) if not v]

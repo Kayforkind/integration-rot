@@ -130,3 +130,16 @@ def test_fix_explicit_func_name_wins():
                                "func_name": "custom_fn"})
     assert status == 200
     assert "from app import custom_fn" in payload["tests"][0]["content"]
+
+
+def test_rest_accepts_repo_alias_for_path():
+    from integration_rot.api_server import api_scan
+    status, body = api_scan({"repo": "demo/sample-app"})
+    assert status == 200
+    assert "dependencies" in body or "direct_calls" in body
+
+
+def test_mcp_accepts_repo_alias_for_path():
+    from integration_rot.mcp_server import tool_scan_repo
+    res = tool_scan_repo({"repo": "demo/sample-app"})
+    assert "error" not in res
