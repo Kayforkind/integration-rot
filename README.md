@@ -245,7 +245,7 @@ python -m pip install -e ".[dev]"   # dev extra = pytest
 This installs the `integration-rot` command. Verify with:
 
 ```bash
-integration-rot --version   # integration-rot 0.4.0
+integration-rot --version   # integration-rot 0.4.1
 ```
 
 ---
@@ -303,7 +303,7 @@ dependency). Tools: `scan_repo`, `check_findings`, `draft_fix`,
 
 ```text
 $ integration-rot mcp   # then: initialize
-< serverInfo: {'name': 'integration-rot', 'version': '0.4.0'} | protocol: 2025-06-18
+< serverInfo: {'name': 'integration-rot', 'version': '0.4.1'} | protocol: 2025-06-18
 $ tools/list
 < tools: ['scan_repo', 'check_findings', 'draft_fix', 'lookup_deprecation', 'get_fixers']
 $ tools/call get_fixers
@@ -321,7 +321,7 @@ codes (`POST /fix` drafts only — it never writes to disk). Real session:
 ```text
 $ integration-rot serve --port 8471 &
 $ curl -s localhost:8471/health
-{"status": "ok", "version": "0.4.0"}
+{"status": "ok", "version": "0.4.1"}
 $ curl -s -X POST localhost:8471/check -d {"path":"demo/sample-app","today":"2026-09-26"}
 counts: {'critical': 0, 'high': 0, 'medium': 2, 'low': 0} | would_exit: 0 | findings: ['sendgrid-v2-api', 'stripe-charges-api']
 $ curl -s localhost:8471/fixers
@@ -950,7 +950,7 @@ integration-rot/
 - The agent caught a real defect during development: the SendGrid fixer was
   emitting syntactically invalid Python (a mis-nested `personalizations`
   dict), and its contract test assumed a wrong function arity. Both are fixed
-  in v0.4.0 — which is exactly what the keep-or-revert loop is for.
+  in v0.4.1 — which is exactly what the keep-or-revert loop is for.
 
 **What it does not do:**
 - The agent fixes one file per finding per iteration, chosen by a fixed

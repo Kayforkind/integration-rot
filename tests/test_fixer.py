@@ -407,3 +407,52 @@ def test_registry_dispatches_new_fixers(tmp_path):
         draft = draft_fix(entry, tmp_path, fname, module="m")
         assert not draft.empty(), entry
         assert len(draft.tests) == 1, entry
+
+
+def test_contract_test_is_hermetic_without_third_party_deps(tmp_path):
+    """Generated contract tests must pass even when the app's third-party
+    deps are not installed: missing imports are stubbed (regression test
+    for the agent sandbox collection error)."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+    from integration_rot.fixer import (
+        draft_fix,
+        generate_stripe_contract_test,
+        _third_party_imports,
+        _hermetic_import_preamble,
+    )
+
+    sample_app = Path(__file__).resolve().parent.parent / "demo" / "sample-app" / "app.py"
+    assert _third_party_imports(sample_app, "app") == ["requests", "stripe"]
+    assert _hermetic_import_preamble([]) == ""
+    preamble = _hermetic_import_preamble(["requests", "stripe"])
+    assert 'for _pkg in ("requests", "stripe",):' in preamble
+    # default keeps old call sites working: no preamble
+    _, content = generate_stripe_contract_test("app", "create_charge")
+    assert "Hermetic import stubs" not in content
+    compile(content, "t.py", "exec")
+
+    # end to end: draft against the sample app, apply the fix, run the
+    # generated test with a bare interpreter (no requests/stripe installed)
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "import requests\nimport stripe\n\n"
+        "def create_charge(a, c, t):\n"
+        "    return stripe.Charge.create(amount=a, currency=c, source=t)\n"
+    )
+    from integration_rot.fixer import write_fix
+    draft = draft_fix("stripe-charges-api", repo, "app.py",
+                      module="app", func_name="create_charge")
+    assert not draft.empty()
+    tpath, tcontent = draft.tests[0]
+    assert "Hermetic import stubs" in tcontent
+    written = write_fix(repo, draft)
+    assert "app.py" in written and tpath in written
+    proc = subprocess.run(
+        [_sys.executable, "-m", "pytest", tpath, "-q", "--no-header",
+         "-p", "no:cacheprovider"],
+        cwd=repo, capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-500:]

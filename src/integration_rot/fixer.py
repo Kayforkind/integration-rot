@@ -10,8 +10,11 @@ Other entries raise `KeyError` by design.
 """
 from __future__ import annotations
 
+import ast
 import difflib
 import re
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +35,73 @@ class FixDraft:
 
     def empty(self) -> bool:
         return not self.changes
+
+
+# ---------------------------------------------------------------------------
+# Hermetic contract tests: stub third-party imports missing from the env
+# ---------------------------------------------------------------------------
+
+def _third_party_imports(source_file: str | Path, own_module: str) -> list[str]:
+    """Top-level third-party package names imported by a Python source file.
+
+    Parsed with ast; stdlib (sys.stdlib_module_names) and the module itself
+    are excluded. Used to keep generated contract tests hermetic: a test that
+    imports the migrated module must not fail collection with
+    ModuleNotFoundError on machines without the app's dependencies.
+    """
+    try:
+        tree = ast.parse(Path(source_file).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return []
+    stdlib = sys.stdlib_module_names
+    own_top = (own_module or "").split(".")[0]
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:  # relative import: same package, not third-party
+                continue
+            names = [node.module or ""]
+        else:
+            continue
+        for name in names:
+            top = name.split(".")[0]
+            if top and top not in stdlib and top != own_top and top not in found:
+                found.append(top)
+    return found
+
+
+def _hermetic_import_preamble(packages: Sequence[str]) -> str:
+    """pytest preamble stubbing third-party imports missing from the env.
+
+    Generated contract tests import the migrated module, which may depend on
+    third-party packages not installed where the test runs. Missing packages
+    are stubbed with MagicMock so collection never fails; installed packages
+    are imported normally and used as-is. This changes nothing the test
+    asserts — it only removes the environment dependency.
+    """
+    if not packages:
+        return ""
+    pkgs = ", ".join(f'"{p}"' for p in packages)
+    return (
+        "import sys\n"
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "# Hermetic import stubs: the migrated module may import third-party\n"
+        "# packages that are not installed where this test runs. Missing ones\n"
+        "# are stubbed so collection never fails on ModuleNotFoundError;\n"
+        "# installed packages are imported normally and used as-is.\n"
+        "def _ensure_importable(_name):\n"
+        "    try:\n"
+        "        __import__(_name)\n"
+        "    except ImportError:\n"
+        "        sys.modules[_name] = MagicMock(name=f\"stub-{_name}\")\n"
+        "\n"
+        f"for _pkg in ({pkgs},):\n"
+        "    _ensure_importable(_pkg)\n"
+        "\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +293,8 @@ def draft_stripe_charges_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
 
 def generate_stripe_contract_test(module: str, func_name: str,
                                   amount: int = 2000, currency: str = "usd",
-                                  payment_method_id: str = "pm_card_visa") -> tuple[str, str]:
+                                  payment_method_id: str = "pm_card_visa",
+                                  stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the migrated function.
 
     Returns (path, content). The test mocks stripe.PaymentIntent.create and
@@ -233,8 +304,12 @@ def generate_stripe_contract_test(module: str, func_name: str,
     payment_method_id must be a PaymentMethod ID (pm_...): Stripe documents
     `payment_method` as a PaymentMethod, Card, or compatible Source ID — NOT
     a raw tok_... token. https://stripe.com/docs/api/payment_intents/create
+
+    stub_imports: third-party packages the migrated module imports, stubbed
+    when missing so the test is hermetic (see _hermetic_import_preamble).
     """
     path = "tests/test_stripe_payment_intent_contract.py"
+    preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Stripe PaymentIntent migration.
 
 Verifies the app calls stripe.PaymentIntent.create with the SCA-ready
@@ -245,7 +320,7 @@ the payment_method value — that must be a real PaymentMethod ID (pm_...),
 converted from any legacy tok_... token beforehand (manual step, see the
 TODO in the migrated code).
 """
-from unittest.mock import patch
+{preamble}from unittest.mock import patch
 
 from {module} import {func_name}
 
@@ -420,15 +495,17 @@ def draft_twilio_authy_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
 
 
 def generate_twilio_contract_test(module: str, start_func: str = "start_verification",
-                                  check_func: str = "check_verification") -> tuple[str, str]:
+                                  check_func: str = "check_verification",
+                                  stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the Verify v2 migration."""
     path = "tests/test_twilio_verify_contract.py"
+    preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Twilio Authy -> Verify v2 migration.
 
 Asserts the app drives the Verify v2 API (services -> verifications /
 verification_checks) instead of the retired Authy API. Uses unittest.mock.
 """
-from unittest.mock import patch
+{preamble}from unittest.mock import patch
 
 from {module} import {start_func}, {check_func}
 
@@ -591,7 +668,8 @@ def draft_sendgrid_v2_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     return draft
 
 
-def generate_sendgrid_contract_test(module: str, func_name: str = "send_email") -> tuple[str, str]:
+def generate_sendgrid_contract_test(module: str, func_name: str = "send_email",
+                                  stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the SendGrid v3 migration.
 
     The test adapts to the patched function's real signature (via inspect)
@@ -601,13 +679,14 @@ def generate_sendgrid_contract_test(module: str, func_name: str = "send_email") 
     from the first argument. Review the placeholders before relying on it.
     """
     path = "tests/test_sendgrid_v3_contract.py"
+    preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the SendGrid v2 -> v3 migration.
 
 Asserts the app POSTs to /v3/mail/send with the v3 nested payload shape.
 Uses unittest.mock — no network calls. Placeholder arguments are derived
 from the function's own signature; review them before relying on this test.
 """
-import inspect
+{preamble}import inspect
 from unittest.mock import patch
 
 import requests
@@ -726,15 +805,17 @@ def draft_plaid_transactions_fix(repo_path: str | Path, rel_path: str) -> FixDra
     return draft
 
 
-def generate_plaid_contract_test(module: str, func_name: str = "sync_transactions") -> tuple[str, str]:
+def generate_plaid_contract_test(module: str, func_name: str = "sync_transactions",
+                                 stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the /transactions/sync migration."""
     path = "tests/test_plaid_sync_contract.py"
+    preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Plaid /transactions/get -> /transactions/sync migration.
 
 Asserts the app drives the cursor-based sync endpoint and pages through
 `has_more`. Uses unittest.mock — no network calls.
 """
-from unittest.mock import MagicMock, patch
+{preamble}from unittest.mock import MagicMock, patch
 
 from {module} import {func_name}
 
@@ -827,15 +908,17 @@ def draft_slack_rtm_fix(repo_path: str | Path, rel_path: str) -> FixDraft:
     return draft
 
 
-def generate_slack_contract_test(module: str = "app") -> tuple[str, str]:
+def generate_slack_contract_test(module: str = "app",
+                                 stub_imports: Sequence[str] = ()) -> tuple[str, str]:
     """Generate a pytest contract test sketch for the Socket Mode migration."""
     path = "tests/test_slack_socket_mode_contract.py"
+    preamble = _hermetic_import_preamble(stub_imports)
     content = f'''"""Contract test sketch for the Slack RTM -> Socket Mode migration.
 
 Asserts the app builds a SocketModeClient with an app-level token and a
 WebClient, registers a listener, and connects. Uses unittest.mock.
 """
-from unittest.mock import patch
+{preamble}from unittest.mock import patch
 
 
 @patch("{module}.SocketModeClient")
@@ -1200,44 +1283,59 @@ def test_v3_base_used():
 def draft_fix(entry_id: str, repo_path: str | Path, rel_path: str,
               **kwargs) -> FixDraft:
     """Dispatch to the right vendor fixer. Raises KeyError if unsupported."""
+    def _stubs(module: str) -> list[str]:
+        # third-party imports of the file being patched, so the generated
+        # contract test can stub the ones missing from the test env
+        return _third_party_imports(Path(repo_path) / rel_path, module)
+
     if entry_id == "stripe-charges-api":
         draft = draft_stripe_charges_fix(repo_path, rel_path)
         if not draft.empty():
+            module = kwargs.get("module", "app")
             test_path, test_content = generate_stripe_contract_test(
-                module=kwargs.get("module", "app"),
-                func_name=kwargs.get("func_name", "create_charge"))
+                module=module,
+                func_name=kwargs.get("func_name", "create_charge"),
+                stub_imports=_stubs(module))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "twilio-authy-api":
         draft = draft_twilio_authy_fix(repo_path, rel_path)
         if not draft.empty():
+            module = kwargs.get("module", "app")
             test_path, test_content = generate_twilio_contract_test(
-                module=kwargs.get("module", "app"),
+                module=module,
                 start_func=kwargs.get("start_func", "start_verification"),
-                check_func=kwargs.get("check_func", "check_verification"))
+                check_func=kwargs.get("check_func", "check_verification"),
+                stub_imports=_stubs(module))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "sendgrid-v2-api":
         draft = draft_sendgrid_v2_fix(repo_path, rel_path)
         if not draft.empty():
+            module = kwargs.get("module", "app")
             test_path, test_content = generate_sendgrid_contract_test(
-                module=kwargs.get("module", "app"),
-                func_name=kwargs.get("func_name", "send_email"))
+                module=module,
+                func_name=kwargs.get("func_name", "send_email"),
+                stub_imports=_stubs(module))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "plaid-legacy-transactions":
         draft = draft_plaid_transactions_fix(repo_path, rel_path)
         if not draft.empty():
+            module = kwargs.get("module", "app")
             test_path, test_content = generate_plaid_contract_test(
-                module=kwargs.get("module", "app"),
-                func_name=kwargs.get("func_name", "sync_transactions"))
+                module=module,
+                func_name=kwargs.get("func_name", "sync_transactions"),
+                stub_imports=_stubs(module))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "slack-rtm-api":
         draft = draft_slack_rtm_fix(repo_path, rel_path)
         if not draft.empty():
+            module = kwargs.get("module", "app")
             test_path, test_content = generate_slack_contract_test(
-                module=kwargs.get("module", "app"))
+                module=module,
+                stub_imports=_stubs(module))
             draft.tests.append((test_path, test_content))
         return draft
     if entry_id == "github-api-query-auth":
