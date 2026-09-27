@@ -4,6 +4,11 @@
 [![tests](https://img.shields.io/badge/tests-131%20passing-brightgreen)](https://github.com/Kayforkind/integration-rot)
 [![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![waitlist](https://img.shields.io/badge/hosted%20version-join%20the%20waitlist-orange)](https://navigatorslab.com/Integrationrot#waitlist)
+
+**🚀 Want a hosted version that watches your repos continuously and opens
+the PRs for you? [Join the waitlist](https://navigatorslab.com/Integrationrot#waitlist)** —
+early signups directly shape what gets built next.
 
 **Agentic AI for engineering teams: finds the third-party API calls rotting in
 your codebase, drafts the migration, proves it with a contract test, and opens
