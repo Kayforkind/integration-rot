@@ -1,7 +1,7 @@
 # Integration-rot Autopilot
 
-[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/Kayforkind/integration-rot)
-[![tests](https://img.shields.io/badge/tests-58%20passing-brightgreen)](https://github.com/Kayforkind/integration-rot)
+[![version](https://img.shields.io/badge/version-0.4.4-blue)](https://github.com/Kayforkind/integration-rot)
+[![tests](https://img.shields.io/badge/tests-131%20passing-brightgreen)](https://github.com/Kayforkind/integration-rot)
 [![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -17,6 +17,12 @@ against a curated deprecation knowledge base (17 entries and growing — each
 linked to its vendor source, dates only where the vendor published them),
 ranks the risk, drafts a working patch with a contract test, and can open the
 pull request for you.
+
+> **Want it hosted?** The CLI is yours today, MIT-licensed. We're building a
+> hosted service that watches your repos continuously, opens PRs with proven
+> migrations, and pages you before a deprecation becomes an incident.
+> [Join the waitlist](https://navigatorslab.com/Integrationrot#waitlist) —
+> it takes ten seconds and tells us what to build first.
 
 ---
 
@@ -194,6 +200,8 @@ added/removed/changed endpoints, parameters, and fields.
 ---
 
 ## End-to-end worked example
+
+<video src="marketing/demo.mp4" width="100%" controls></video>
 
 The repo ships with `demo/sample-app`, an app that *intentionally* uses
 outdated integrations: `stripe.Charge.create` (legacy Charges API) and

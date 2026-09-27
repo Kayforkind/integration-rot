@@ -530,6 +530,63 @@ Pull request opened: https://github.com/myorg/myrepo/pull/42</pre>
   </div>
 </section>
 
+<section id="waitlist">
+  <div class="wrap">
+    <h2>Hosted version — early access</h2>
+    <p class="lede">The open-source CLI is yours today. We're building a hosted service that
+    watches your repos continuously, opens PRs with proven migrations, and pages you
+    before a deprecation becomes an incident. Join the waitlist — <span id="wl-count">…</span> developers already have.</p>
+    <form id="wl-form" style="display:flex;gap:10px;flex-wrap:wrap;max-width:640px;margin-top:18px;">
+      <input id="wl-email" type="email" required placeholder="you@company.com"
+             style="flex:2 1 240px;padding:12px 14px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e2e8f0;font-size:15px;" />
+      <input id="wl-usecase" type="text" placeholder="What stack are you on? (optional)"
+             style="flex:2 1 240px;padding:12px 14px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e2e8f0;font-size:15px;" />
+      <button class="btn btn-primary" type="submit" style="border:none;cursor:pointer;">Join the waitlist</button>
+    </form>
+    <p id="wl-msg" style="margin-top:12px;min-height:22px;color:#4ade80;"></p>
+  </div>
+</section>
+<script>
+(function () {
+  var form = document.getElementById("wl-form");
+  var msg = document.getElementById("wl-msg");
+  fetch("/Integrationrot/waitlist/count").then(function (r) { return r.json(); }).then(function (d) {
+    document.getElementById("wl-count").textContent = d.count || 0;
+  }).catch(function () { document.getElementById("wl-count").textContent = "0"; });
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    msg.style.color = "#94a3b8";
+    msg.textContent = "Joining…";
+    fetch("/Integrationrot/waitlist", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: document.getElementById("wl-email").value,
+        use_case: document.getElementById("wl-usecase").value
+      })
+    }).then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
+    .then(function (res) {
+      if (res.s === 200 && res.d.ok) {
+        msg.style.color = "#4ade80";
+        msg.textContent = res.d.duplicate
+          ? "You're already on the list — we'll be in touch."
+          : "You're on the list. We'll email you when hosted early access opens.";
+        form.reset();
+        if (res.d.count != null) document.getElementById("wl-count").textContent = res.d.count;
+      } else {
+        msg.style.color = "#f87171";
+        msg.textContent = (res.d && res.d.error === "invalid email")
+          ? "Please enter a valid email address."
+          : "Something went wrong — please try again.";
+      }
+    }).catch(function () {
+      msg.style.color = "#f87171";
+      msg.textContent = "Something went wrong — please try again.";
+    });
+  });
+})();
+</script>
+
 <footer>
   <div class="wrap">
     <span>Integration-rot Autopilot — MIT © Kayforkind</span>
